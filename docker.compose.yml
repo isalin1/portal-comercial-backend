@@ -1,0 +1,30 @@
+version: '3.8'
+
+services:
+  api:
+    build: .
+    container_name: api_lavanderia
+    restart: always
+    environment:
+      DATABASE_URL: postgres://user:${DB_PASSWORD}@db:5432/${DB_NAME}
+      NODE_ENV: production
+    ports:
+      - "3001:3000"   # API quedará disponible en el puerto 3001 del VPS
+    depends_on:
+      - db
+
+  db:
+    image: postgres:15
+    container_name: lavanderiadb
+    restart: always
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
+    volumes:
+      - lavanderia-data:/var/lib/postgresql/data
+    ports:
+      - "5434:5432"
+
+volumes:
+  lavanderia-data:
