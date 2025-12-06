@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.json",
+  "exclude": [
+     "**/*spec.ts",
+    "node_modules",
+    "dist",
+    "test",
+    "lavanderia-front/**/*"
+  ]
+}

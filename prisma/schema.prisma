@@ -1,0 +1,461 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+  //output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Department {
+  id        Int        @id @default(autoincrement())
+  name      String     @unique
+  createdAt DateTime   @default(now()) @map("created_At")
+  updatedAt DateTime   @updatedAt @map("updated_At")
+  provinces Province[]
+
+  @@map("departments")
+}
+
+model Province {
+  id           Int        @id @default(autoincrement())
+  name         String     @unique
+  createdAt    DateTime   @default(now()) @map("created_At")
+  updatedAt    DateTime   @updatedAt @map("updated_At")
+  departmentId Int        @map("department_id")
+  districts    District[]
+  department   Department @relation(fields: [departmentId], references: [id])
+
+  @@map("provinces")
+}
+
+model District {
+  id        Int      @id @default(autoincrement())
+  name      String   @unique
+  createdAt DateTime @default(now()) @map("created_At")
+  updatedAt DateTime @updatedAt @map("updated_At")
+
+  provinceId Int      @map("province_id")
+  province   Province @relation(fields: [provinceId], references: [id])
+
+  @@map("districts")
+}
+
+model User {
+  id        Int     @id @default(autoincrement())
+  firstname String
+  lastname  String
+  phone     String
+  dni       String?
+
+  isActive                 Boolean   @default(false) // Cambiado a false por defecto
+  isEmailVerified          Boolean   @default(false) // Nuevo campo
+  emailVerificationToken   String? // Token para verificación
+  emailVerificationExpires DateTime? // Expiración del token
+  passwordResetToken       String? // Token para reset de contraseña
+  passwordResetExpires     DateTime? // Expiración del token de reset
+  role                     Roles     @default(ADMIN) //ojo esto se debe cambiar!!
+
+  email    String @unique
+  password String
+
+  createdAt DateTime @default(now()) @map("created_At")
+  updatedAt DateTime @updatedAt @map("updated_At")
+
+  // Negocio al que pertenece el cliente (solo para role CLIENT)
+  clientBusinesId Int?
+  clientBusines   Busines? @relation("ClientBusiness", fields: [clientBusinesId], references: [id])
+
+  business Busines[] @relation("BusinessOwner")
+
+  pointsales PointSale[]
+
+  serviceorders ServiceOrder[]
+
+  // Relación con ubicación (solo para clientes)
+  clientLocation ClientLocation?
+
+  @@map("users")
+}
+
+model ClientLocation {
+  id         Int     @id @default(autoincrement())
+  department String?
+  province   String?
+  district   String?
+  address    String?
+
+  // Relación con el usuario cliente
+  userId Int  @unique
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("client_locations")
+}
+
+model Busines {
+  id            Int     @id @default(autoincrement())
+  name          String
+  comercialname String
+  doctype       DocType
+  numdoc        String
+
+  createdAt DateTime @default(now()) @map("created_At")
+  updatedAt DateTime @updatedAt @map("updated_At")
+
+  userId Int
+  user   User @relation("BusinessOwner", fields: [userId], references: [id])
+
+  pointsales        PointSale[]
+  servicecategories ServiceCategory[]
+  clients           User[]            @relation("ClientBusiness")
+  businessPlans     BusinessPlan[]
+
+  @@map("business")
+}
+
+model PointSale {
+  id          Int    @id @default(autoincrement())
+  name        String
+  address     String
+  phonenumber String
+
+  createdAt DateTime @default(now()) @map("created_At")
+  updatedAt DateTime @updatedAt @map("updated_At")
+
+  businesId Int
+  business  Busines @relation(fields: [businesId], references: [id])
+
+  userId      Int? // 👈 Este es el colaborador asignado
+  colaborador User? @relation(fields: [userId], references: [id])
+
+  pointsaleServices PointSaleService[]
+
+  serviceorders ServiceOrder[]
+
+  expenses Expense[]
+  cashContributions CashContribution[]
+  cashWithdrawals CashWithdrawal[]
+
+  @@map("pointsales")
+}
+
+model ServiceCategory {
+  id           Int                 @id @default(autoincrement())
+  name         String
+  categoryType ServiceCategoryType
+  unit         ServiceUnit
+
+  createdAt DateTime @default(now()) @map("created_At")
+  updatedAt DateTime @updatedAt @map("updated_At")
+
+  businesId Int
+  busines   Busines @relation(fields: [businesId], references: [id])
+
+  listservices ListService[]
+
+  @@map("servicecategories")
+}
+
+model ListService {
+  id        Int         @id @default(autoincrement())
+  type      ServiceType
+  basePrice Decimal // Precio base definido por el Busines
+  isActive  Boolean     @default(true)
+
+  createdAt DateTime @default(now()) @map("created_At")
+  updatedAt DateTime @updatedAt @map("updated_At")
+
+  servicecategoryId Int
+  servicecategory   ServiceCategory @relation(fields: [servicecategoryId], references: [id])
+
+  // Relación con PointSale para personalización de precios
+  pointsaleServices PointSaleService[]
+
+  itemserviceorders ItemServiceOrder[]
+
+  @@map("listservices")
+}
+
+// Nueva tabla para personalización por PointSale
+model PointSaleService {
+  id       Int     @id @default(autoincrement())
+  price    Decimal // Precio personalizado para este PointSale
+  isActive Boolean @default(true)
+
+  createdAt DateTime @default(now()) @map("created_At")
+  updatedAt DateTime @updatedAt @map("updated_At")
+
+  listserviceId Int
+  listservice   ListService @relation(fields: [listserviceId], references: [id])
+
+  pointsaleId Int
+  pointsale   PointSale @relation(fields: [pointsaleId], references: [id])
+
+  @@unique([listserviceId, pointsaleId]) // Un servicio por PointSale
+  @@map("pointsaleservices")
+}
+
+model ServiceOrder {
+  id          Int         @id @default(autoincrement())
+  code        String?     @unique // Código único: MM-XXXX (mes-correlativo)
+  statusOrder StatusOrder
+
+  createdAt DateTime @default(now()) @map("created_At")
+  updatedAt DateTime @updatedAt @map("updated_At")
+
+  userId  Int // 👈 Este es el colaborador asignado
+  cliente User @relation(fields: [userId], references: [id])
+
+  pointsaleId Int // 👈 Este es el colaborador asignado
+  pointsale   PointSale @relation(fields: [pointsaleId], references: [id])
+
+  itemserviceorders ItemServiceOrder[]
+
+  salesorder SalesOrder? @relation("ServiceOrderToSalesOrder")
+
+  @@map("serviceorders")
+}
+
+model ItemServiceOrder {
+  id           Int         @id @default(autoincrement())
+  code         String?     // Código único: MM-XXXX-YY (orden-categoría)
+  statusOrder  StatusOrder @default(RECEIVED) // Estado individual del item
+  quantity     Decimal
+  totalPrice   Decimal
+  numberpieces Int
+  subtotal     Decimal
+  observations String?     // Comentarios sobre las prendas recibidas
+
+  createdAt DateTime @default(now()) @map("created_At")
+  updatedAt DateTime @updatedAt @map("updated_At")
+
+  listserviceId Int // 👈 Este es el colaborador asignado
+  listservice   ListService @relation(fields: [listserviceId], references: [id])
+
+  serviceorderId Int // 👈 Este es el colaborador asignado
+  serviceorder   ServiceOrder @relation(fields: [serviceorderId], references: [id])
+
+  @@map("itemserviceorders")
+}
+
+model SalesOrder {
+  id              Int       @id @default(autoincrement())
+  code            String?   @unique // Código único: MM-XXXX (mes-correlativo, mismo que ServiceOrder)
+  total           Decimal
+  servicedeadline DateTime
+  statusPay       StatusPay
+
+  createdAt DateTime @default(now()) @map("created_At")
+  updatedAt DateTime @updatedAt @map("updated_At")
+
+  serviceorderId Int          @unique // 👈 Este es el colaborador asignado
+  serviceorder   ServiceOrder @relation("ServiceOrderToSalesOrder", fields: [serviceorderId], references: [id])
+
+  payments Payment[]
+
+  @@map("salesorders")
+}
+
+model Payment {
+  id        Int       @id @default(autoincrement())
+  amount    Decimal   @db.Decimal(10, 2)
+  methodpay MethodPay
+  datepaid  DateTime  @default(now())
+
+  createdAt DateTime @default(now()) @map("created_At")
+  updatedAt DateTime @updatedAt @map("updated_At")
+
+  salesorderId Int
+  salesorder   SalesOrder @relation(fields: [salesorderId], references: [id], onDelete: Cascade)
+
+  @@map("payments")
+}
+
+model Expense {
+  id        Int      @id @default(autoincrement())
+  date      DateTime // Fecha del gasto
+  recipient String   // Destinatario del gasto
+  concept   String   // Concepto del gasto (ej: Movilidad, Almuerzo, Internet, etc.)
+  amount    Decimal  @db.Decimal(10, 2) // Monto del gasto
+
+  createdAt DateTime @default(now()) @map("created_At")
+  updatedAt DateTime @updatedAt @map("updated_At")
+
+  pointsaleId Int
+  pointsale   PointSale @relation(fields: [pointsaleId], references: [id], onDelete: Cascade)
+
+  @@map("expenses")
+}
+
+model CashContribution {
+  id        Int      @id @default(autoincrement())
+  date      DateTime @db.Date // Fecha del aporte
+  amount    Decimal  @db.Decimal(10, 2) // Monto del aporte
+  concept   String?  // Concepto del aporte (opcional)
+  notes     String?  // Notas adicionales (opcional)
+
+  createdAt DateTime @default(now()) @map("created_At")
+  updatedAt DateTime @updatedAt @map("updated_At")
+
+  pointsaleId Int
+  pointsale   PointSale @relation(fields: [pointsaleId], references: [id], onDelete: Cascade)
+
+  @@index([pointsaleId, date])
+  @@map("cash_contributions")
+}
+
+model CashWithdrawal {
+  id        Int      @id @default(autoincrement())
+  date      DateTime @db.Date // Fecha del retiro
+  amount    Decimal  @db.Decimal(10, 2) // Monto del retiro
+  concept   String?  // Concepto del retiro (opcional)
+  notes     String?  // Notas adicionales (opcional)
+
+  createdAt DateTime @default(now()) @map("created_At")
+  updatedAt DateTime @updatedAt @map("updated_At")
+
+  pointsaleId Int
+  pointsale   PointSale @relation(fields: [pointsaleId], references: [id], onDelete: Cascade)
+
+  @@index([pointsaleId, date])
+  @@map("cash_withdrawals")
+}
+
+model Plan {
+  id            Int      @id @default(autoincrement())
+  tipo          String   // 'premium', 'pro', 'emprendedor'
+  nombrePeriodo String   // 'mensual', 'semestral', 'anual'
+  diasPeriodo   Int      // Días de duración
+  costo         Decimal? @db.Decimal(10, 2)
+  createdAt     DateTime @default(now()) @map("created_At")
+  updatedAt     DateTime @updatedAt @map("updated_At")
+  
+  businessPlans BusinessPlan[]
+  
+  @@map("plans")
+}
+
+model BusinessPlan {
+  id              Int       @id @default(autoincrement())
+  businesId       Int       @map("busines_id")
+  planId          Int       @map("plan_id")
+  fechaInicio     DateTime  @db.Date @map("fecha_inicio")
+  fechaFin        DateTime  @db.Date @map("fecha_fin")
+  estado          String    @default("ACTIVO") // 'ACTIVO', 'VENCIDO', 'SUSPENDIDO'
+  fechaPago       DateTime? @db.Date @map("fecha_pago")
+  fechaSuspension DateTime? @db.Date @map("fecha_suspension") // Fecha en que se suspendió
+  diasSuspendidos Int       @default(0) @map("dias_suspendidos") // Total de días suspendidos acumulados
+  
+  business    Busines  @relation(fields: [businesId], references: [id], onDelete: Cascade)
+  plan        Plan     @relation(fields: [planId], references: [id])
+  payments    PlanPayment[]
+  
+  createdAt   DateTime @default(now()) @map("created_At")
+  updatedAt   DateTime @updatedAt @map("updated_At")
+  
+  @@unique([businesId, planId, fechaInicio])
+  @@index([businesId])
+  @@index([estado])
+  @@index([fechaFin])
+  @@map("business_plans")
+}
+
+model PlanPayment {
+  id            Int      @id @default(autoincrement())
+  businessPlanId Int     @map("business_plan_id")
+  monto         Decimal  @db.Decimal(10, 2)
+  fechaPago     DateTime @db.Date @map("fecha_pago")
+  metodoPago    String?  @map("metodo_pago")
+  comprobante   String?
+  estado        String   @default("PENDIENTE") // 'PENDIENTE', 'APROBADO', 'RECHAZADO'
+  
+  businessPlan  BusinessPlan @relation(fields: [businessPlanId], references: [id], onDelete: Cascade)
+  
+  createdAt     DateTime @default(now()) @map("created_At")
+  updatedAt     DateTime @updatedAt @map("updated_At")
+  
+  @@index([businessPlanId])
+  @@index([estado])
+  @@map("plan_payments")
+}
+
+enum MethodPay {
+  CASH
+  TRANSFER
+  YAPE
+  PLIN
+  CARD
+  YAPE_PLIN
+}
+
+enum ServiceType {
+  GENERAL
+  CASACA
+  ABRIGO
+  CAMISA
+  TERNO
+  PANTALON
+  JEAN
+  CHOMPA
+  CORBATA
+  UNO_PLAZA
+  UNO_MEDIO_PLAZA
+  DOS_PLAZAS
+  QUEEN
+  KING
+  OTROS
+}
+
+enum ServiceCategoryType {
+  LAVADO
+  LAVADO_ESPECIAL
+  LAVADO_EN_SECO
+  PLANCHADO
+  FRAZADAS
+  EDREDONES
+  ZAPATILLAS
+  ALFOMBRAS
+  CORTINAS
+}
+
+enum Roles {
+  ADMIN
+  COLABORADOR
+  CLIENT
+  SUPERADMIN
+}
+
+enum DocType {
+  RUC
+  DNI
+}
+
+enum ServiceUnit {
+  KILOGRAM // kg - Para lavado por peso
+  UNIT // pieza - Para prendas individuales
+  PAIR // par - Para zapatillas
+  METER // mt - Para cortinas y alfombras
+}
+
+enum StatusPay {
+  UNPAID
+  PARTIAL
+  PAID
+}
+
+enum StatusOrder {
+  RECEIVED
+  IN_PROGRESS
+  READY
+  DELIVERED
+}

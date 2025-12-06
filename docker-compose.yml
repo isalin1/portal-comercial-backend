@@ -1,0 +1,20 @@
+
+
+
+version: '3'
+services:
+  db:
+    image: postgres:latest
+    restart: always
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
+    container_name: lavanderiadb
+    ports:
+      - "5434:5432"
+    volumes:
+      - lavanderia-data:/var/lib/postgresql/data
+
+volumes:
+  lavanderia-data:
