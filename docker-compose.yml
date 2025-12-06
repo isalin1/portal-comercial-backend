@@ -9,7 +9,7 @@ services:
       DATABASE_URL: postgres://user:${DB_PASSWORD}@db:5432/${DB_NAME}
       NODE_ENV: production
     ports:
-      - "3001:3000"   # API quedará disponible en el puerto 3001 del VPS
+      - "3002:3000"   # API quedará disponible en el puerto 3001 del VPS
     depends_on:
       - db
 
