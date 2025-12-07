@@ -1,0 +1,1743 @@
+name: Deploy to VPS
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: 🚀 Deploy to VPS
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USER }}
+          key: ${{ secrets.KEY }}
+          script: |
+            # Crear directorio si no existe
+            mkdir -p /var/www/html/api.namiatech.com
+Docker deployment 502 bad gateway errorCompartirroot@namiatech:/var/www/html/api.namiatech.com/lavanderia-backend# docker ps
+CONTAINER ID   IMAGE                    COMMAND                  CREATED          STATUS                         PORTS                                         NAMES
+01a96b8b1027   lavanderia-backend-api   "docker-entrypoipastedY# --- Build Stage ---
+FROM node:18-alpine AS builder
+WORKDIR /app
+COPY package*.json ./
+RUN npm install
+COPY . .
+RUN npx prisma generate
+RUN npm run build
+# --- Production Stage ---
+FROM node:18-alpine
+WORKDIR /app
+COPY package*.json ./
+RUN npm install --omit=dev
+COPY --from=builder /app/package*.json ./
+COPY --from=builder /app/node_modules ./node_modules   # <--- clave
+COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/prisma ./prisma
+EXPOSE 3002
+CMD ["node", "dist/src/main.js"]version: '3.8'
+services:
+  api:
+    build: .
+    container_name: api_lavanderia
+    restart: always
+    environment:
+      DATABASE_URL: postgres://user:${DB_PASSWORD}@db:5432/${DB_NAME}
+      NODE_ENV: production
+    ports:
+      - "3002:3002"   # API quedará disponible en el puerto 3001 del VPS
+    depends_on:
+      - db
+  db:
+    image: postgres:15
+    container_name: lavanderiadb
+    restart: always
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
+    volumes:
+      - lavanderia-data:/var/lib/postgresql/data
+    ports:
+      - "5434:5432"
+volumes:
+  lavanderia-data:tengo en vps nginx esto  GNU nano 7.2                                            /etc/nginx/sites-available/api.namiatech.com
+server {
+    server_name api.namiatech.com;
+    #client_max_body_size 100M; //PARA PERMITIR TAMAÑO EN ARCHIVOS PESADOS
+    location / {
+        proxy_pass http://localhost:3002;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+    listen 443 ssl; # managed by Certbot
+    ssl_certificate /etc/letsencrypt/live/api.namiatech.com/fullchain.pem; # managed by Certbot
+    ssl_certificate_key /etc/letsencrypt/live/api.namiatech.com/privkey.pem; # managed by Certbot
+    include /etc/letsencrypt/options-ssl-nginx.conf; # managed by Certbot
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem; # managed by Certbot
+}
+server {
+    if ($host = api.namiatech.com) {
+        return 301 https://$host$request_uri;
+    } # managed by Certbot
+    listen 80;
+    server_name api.namiatech.com;
+    return 404; # managed by Certbot
+}pero no se desplega veo en https://api.namiatech.com/502 Bad Gateway
+nginx/1.24.0 (Ubuntu)y dockerMostrar másEl problema es claro: tu contenedor api_lavanderia está en un bucle de reinicio constante debido a un error de TypeScript/JavaScript. El error indica que un enum está siendo undefined o null en el archivo create-user.dto.js línea 80.
+Solución paso a paso:
+1. Revisar el archivo fuente create-user.dto.ts
+Busca en tu código fuente la línea ~80 del DTO:
+bashcat src/user/dto/create-user.dto.ts
+El problema típico es algo como esto:
+typescript// ❌ INCORRECTO - El enum no está importado correctamente
+@IsEnum(UserRole)  // UserRole es undefined
+role: string;
+Soluciones posibles:
+Opción A: El enum no está exportado o importado correctamente
+typescript// Verifica que el enum esté bien definido
+// user/enums/user-role.enum.ts
+export enum UserRole {
+  ADMIN = 'admin',
+  USER = 'user',
+  GUEST = 'guest'
+}
+
+// En create-user.dto.ts
+import { UserRole } from '../enums/user-role.enum';
+
+@IsEnum(UserRole)
+role: UserRole;
+Opción B: Si el enum está en Prisma, asegúrate de que esté generado
+typescriptimport { UserRole } from '@prisma/client';
+
+@IsEnum(UserRole)
+role: UserRole;
+2. Verificar la compilación de TypeScript
+El problema está en el código compilado (dist/). Necesitas:
+bash# En tu servidor
+cd /var/www/html/api.namiatech.com/lavanderia-backend
+
+# Revisar el archivo compilado problemático
+cat dist/src/user/dto/create-user.dto.js | grep -A 5 -B 5 "IsEnum"
+3. Fix rápido temporal (para verificar)
+Si necesitas que funcione YA mientras arreglas el código:
+Opción temporal: Comenta el decorador @IsEnum() problemático:
+typescript// @IsEnum(UserRole)  // Comentar temporalmente
+role: string;
+Luego reconstruye:
+bash# En tu máquina local o servidor
+npm run build
+docker-compose down
+docker-compose up -d --build
+4. Solución correcta en el código
+Revisa todos tus DTOs que usen @IsEnum():
+bash# Buscar todos los usos de IsEnum
+grep -r "IsEnum" src/
+Asegúrate de que:
+
+El enum esté correctamente importado
+El enum exista y esté exportado
+El import path sea correcto
+
+Ejemplo correcto completo:
+typescript// src/user/enums/user-role.enum.ts
+export enum UserRole {
+  ADMIN = 'admin',
+  USER = 'user'
+}
+
+// src/user/dto/create-user.dto.ts
+import { IsEnum, IsString, IsEmail } from 'class-validator';
+import { UserRole } from '../enums/user-role.enum';
+
+export class CreateUserDto {
+  @IsEmail()
+  email: string;
+
+  @IsString()
+  password: string;
+
+  @IsEnum(UserRole, { message: 'Role must be a valid UserRole' })
+  role: UserRole;
+}
+5. Reconstruir y redesplegar
+bash# 1. Detener contenedores
+docker-compose down
+
+# 2. Limpiar builds anteriores
+rm -rf dist node_modules
+
+# 3. Reinstalar dependencias
+npm install
+
+# 4. Regenerar Prisma
+npx prisma generate
+
+# 5. Compilar
+npm run build
+
+# 6. Verificar que dist/ tiene los archivos correctos
+ls -la dist/src/user/dto/
+
+# 7. Reconstruir Docker
+docker-compose build --no-cache
+
+# 8. Iniciar
+docker-compose up -d
+
+# 9. Ver logs
+docker logs -f api_lavanderia
+6. Verificar el problema específico
+Muéstrame el contenido de tu archivo:
+bashcat src/user/dto/create-user.dto.ts
+Y también verifica si tienes enums definidos:
+bashfind src/ -name "*.enum.ts"
+Una vez que arregles el problema del enum y el contenedor inicie correctamente, el 502 de Nginx desaparecerá porque la API estará respondiendo en el puerto 3002.
+¿Puedes compartir el contenido de tu create-user.dto.ts para ver exactamente qué enum está causando el problema?
+        
+            
+            
+            
+            
+        
+        Ypero no envio build a github por ende nio hay en vps ,  ya que estara en cotnendor supongoroot@namiatech:/var/www/html/api.namiatech.com/lavanderia-backend# cat dist/src/user/dto/create-user.dto.js | grep -A 5 -B 5 "IsEnum"
+cat: dist/src/user/dto/create-user.dto.js: No such file or directory
+root@namiatech:/var/www/html/api.namiatech.com/lavanderia-backend# ls
+check-all-admins.ts  correct-plan-states.ts               fix-jeyson-business.ts    prisma                        test-yomira-password.ts
+check-andres.ts      create-essential-users.js            fix-milagros-password.ts  README.md                     tsconfig.build.json
+check-clients.js     docker-compose-old.txt               fix-rusber-password.ts    reset-mia-password.ts         tsconfig.json
+check-clients.ts     docker-compose.yml                   fix-yomira-password.ts    reset-superadmin-password.ts  update-existing-clients.ts
+check-users.ts       Dockerfile                           nest-cli.json             src                           verify-clients.ts
+check-yomira.ts      eslint.config.mjs                    package.json              test
+cleanup-users.js     fix-colaboradores-email-verified.ts  package-lock.json         test-clientes-api.ts
+root@namiatech:/var/www/html/api.namiatech.com/lavanderia-backend#Mostrar más¡Exacto! Tienes razón. El dist/ se genera dentro del contenedor Docker durante el build. El problema está en el código fuente que sí tienes en el VPS.
+Vamos a revisar el archivo fuente:
+bashcat src/user/dto/create-user.dto.ts
+Mientras tanto, también revisa si tienes enums definidos:
+bash# Buscar archivos de enums
+find src/ -name "*.enum.ts" -o -name "*enum*"
+
+# O buscar donde uses IsEnum en tus DTOs
+grep -r "@IsEnum" src/
+
+Diagnóstico probable
+El error ocurre porque:
+
+En create-user.dto.ts usas @IsEnum(AlgunEnum)
+Ese enum NO está correctamente importado o está undefined
+Cuando Docker compila el código (RUN npm run build), TypeScript lo compila pero el enum queda como undefined
+Al ejecutar, class-validator intenta hacer Object.entries(undefined) y explota
+
+
+Mientras revisas, puedes ver los logs del build
+bash# Reconstruir el contenedor para ver DÓNDE falla exactamente
+docker-compose build api 2>&1 | tee build.log
+
+# O ver el log completo del contenedor
+docker logs api_lavanderia 2>&1 | head -50
+
+Quick fix si encuentras el enum problemático
+Una vez que identifiques qué @IsEnum() está causando el problema, puedes:
+Opción 1: Comentarlo temporalmente
+typescript// @IsEnum(ProblematicEnum)
+someField: string;
+Opción 2: Asegurarte de que el enum exista y esté importado
+typescript// Verifica que esto exista
+export enum UserRole {
+  ADMIN = 'admin',
+  USER = 'user'
+}
+
+// Y que esté importado correctamente
+import { UserRole } from '../enums/user-role.enum';
+
+Muéstrame el resultado de:
+bashcat src/user/dto/create-user.dto.ts
+Y también:
+bashgrep -r "@IsEnum" src/ --include="*.ts"
+Así vemos exactamente qué enum está roto y lo arreglamos de raíz. 🔧
+        
+            
+            
+            
+            
+        
+        Ycat src/user/dto/create-user.dto.ts
+import { IsString, IsNotEmpty, IsOptional, IsBoolean, IsEmail, IsEnum } from 'class-validator';
+import { Roles } from '@prisma/client';
+export class CreateUserDto {
+  @IsString()
+  @IsNotEmpty()
+  firstname: string;
+  @IsString()
+  @IsNotEmpty()
+  lastname: string;
+  @IsString()
+  @IsNotEmpty()
+  phone: string;
+  @IsString()
+  @IsOptional()
+  dni?: string;
+  @IsBoolean()
+  @IsOptional()
+  isActive?: boolean;
+  @IsBoolean()
+  @IsOptional()
+  isEmailVerified?: boolean;
+  @IsString()
+  @IsOptional()
+  emailVerificationToken?: string;
+  @IsOptional()
+  emailVerificationExpires?: Date;
+  @IsString()
+  @IsOptional()
+  passwordResetToken?: string;
+  @IsOptional()
+  passwordResetExpires?: Date;
+  @IsEnum(Roles)
+  @IsOptional()
+  role?: Roles;
+  @IsEmail()
+  email: string;
+  @IsString()
+  @IsNotEmpty()
+  password: string;
+}
+root@namiatech:/var/www/html/api.namiatech.com/lavanderia-backend# grep -r "@IsEnum" src/
+src/busines/dto/create-busines.dto.ts:  @IsEnum(DocType)
+src/salesorder/dto/create-salesorder.dto.ts:  @IsEnum(StatusPay)
+src/orderservice/dto/update-serviceorder.dto.ts:  @IsEnum(StatusOrder)
+src/listservice/dto/create-listservice.dto.ts:  @IsEnum(ServiceType)
+src/payment/dto/create-payment.dto.ts:  @IsEnum(MethodPay)
+src/user/dto/create-user.dto.ts:  @IsEnum(Roles)
+src/servicecategory/dto/create-servicecategory.dto.ts:  @IsEnum(ServiceCategoryType)
+src/servicecategory/dto/create-servicecategory.dto.ts:  @IsEnum(ServiceUnit)
+root@namiatech:/var/www/html/api.namiatech.com/lavanderia-backend#Mostrar másPerfecto, ahora veo el problema. Tienes múltiples @IsEnum() usando enums que probablemente no están siendo exportados correctamente desde Prisma.
+Vamos a verificar tu archivo schema.prisma:
+bashcat prisma/schema.prisma | grep -A 5 "enum"
+
+El problema probable
+Cuando haces npm run build dentro de Docker, Prisma genera los tipos, pero los enums pueden no estar disponibles correctamente si:
+
+npx prisma generate no se ejecuta antes del build
+Los enums no están en el schema.prisma
+
+
+Solución: Revisar tu Dockerfile
+Tu Dockerfile actual:
+dockerfile# --- Build Stage ---
+FROM node:18-alpine AS builder
+WORKDIR /app
+COPY package*.json ./
+RUN npm install
+COPY . .
+RUN npx prisma generate  # ✅ Esto está bien
+RUN npm run build
+
+# --- Production Stage ---
+FROM node:18-alpine
+WORKDIR /app
+COPY package*.json ./
+RUN npm install --omit=dev
+COPY --from=builder /app/package*.json ./
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/prisma ./prisma  # ✅ Esto está bien
+EXPOSE 3002
+CMD ["node", "dist/src/main.js"]
+El Dockerfile parece correcto. El problema es que los enums de Prisma no están definidos en tu schema.prisma o están mal escritos.
+
+Verifica tu schema.prisma
+bashcat prisma/schema.prisma
+Deberías tener algo como esto:
+prismaenum Roles {
+  ADMIN
+  USER
+  SUPERADMIN
+  // ... otros roles
+}
+
+enum DocType {
+  DNI
+  RUC
+  // ... otros tipos
+}
+
+enum StatusPay {
+  PENDING
+  PAID
+  CANCELLED
+}
+
+enum StatusOrder {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum ServiceType {
+  LAVADO
+  PLANCHADO
+  // ... otros
+}
+
+enum MethodPay {
+  CASH
+  CARD
+  TRANSFER
+}
+
+enum ServiceCategoryType {
+  PREMIUM
+  STANDARD
+}
+
+enum ServiceUnit {
+  KG
+  UNIT
+}
+
+Si faltan enums en schema.prisma
+Opción 1: Agregar los enums faltantes
+Edita prisma/schema.prisma y agrega todos los enums:
+bashnano prisma/schema.prisma
+Agrega al final del archivo:
+prismaenum Roles {
+  SUPERADMIN
+  ADMIN
+  USER
+  COLABORADOR
+}
+
+enum DocType {
+  DNI
+  RUC
+  PASSPORT
+}
+
+enum StatusPay {
+  PENDING
+  PAID
+  CANCELLED
+}
+
+enum StatusOrder {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum ServiceType {
+  WASH
+  IRON
+  WASH_IRON
+}
+
+enum MethodPay {
+  CASH
+  CARD
+  YAPE
+  PLIN
+  TRANSFER
+}
+
+enum ServiceCategoryType {
+  PREMIUM
+  STANDARD
+  EXPRESS
+}
+
+enum ServiceUnit {
+  KG
+  UNIT
+  PIECE
+}
+Luego:
+bash# Regenerar Prisma localmente
+npx prisma generate
+
+# Commitear los cambios
+git add prisma/schema.prisma
+git commit -m "Add missing enums to Prisma schema"
+git push
+
+# En el VPS, hacer pull
+cd /var/www/html/api.namiatech.com/lavanderia-backend
+git pull
+
+# Reconstruir Docker
+docker-compose down
+docker-compose build --no-cache
+docker-compose up -d
+
+# Ver logs
+docker logs -f api_lavanderia
+
+Opción 2: Si los enums NO deberían estar en Prisma
+Si tus enums están en archivos separados (ej: src/enums/roles.enum.ts), muéstrame:
+bashfind src/ -name "*.enum.ts"
+cat src/enums/roles.enum.ts  # o el que encuentres
+
+Muéstrame el contenido de tu prisma/schema.prisma completo para ver qué enums faltan:
+bashcat prisma/schema.prisma
+🎯 Una vez que agreguemos los enums faltantes, el contenedor debería iniciar correctamente.
+        
+            
+            
+            
+            
+        
+        Ypero al hacer npm run start:prod que es node dist/src/main.js en local funciona y se levanta mi appusando build local¡Ah! Excelente información. Eso significa que:
+
+✅ Tu código compila correctamente en local
+✅ Los enums funcionan en local
+❌ Pero fallan dentro del contenedor Docker
+
+Esto apunta a un problema de diferencia entre el entorno local y Docker.
+
+Posibles causas
+1. Prisma no se está generando correctamente en Docker
+Modifica tu Dockerfile para asegurar que Prisma se genere en ambas etapas:
+dockerfile# --- Build Stage ---
+FROM node:18-alpine AS builder
+WORKDIR /app
+
+# Copiar archivos de dependencias
+COPY package*.json ./
+COPY prisma ./prisma
+
+# Instalar dependencias
+RUN npm install
+
+# Generar Prisma Client ANTES de copiar el código
+RUN npx prisma generate
+
+# Copiar el resto del código
+COPY . .
+
+# Build
+RUN npm run build
+
+# --- Production Stage ---
+FROM node:18-alpine
+WORKDIR /app
+
+# Copiar package files
+COPY package*.json ./
+
+# Instalar solo dependencias de producción
+RUN npm install --omit=dev
+
+# Copiar prisma schema
+COPY --from=builder /app/prisma ./prisma
+
+# Generar Prisma Client en producción también
+RUN npx prisma generate
+
+# Copiar node_modules del builder (incluye Prisma Client generado)
+COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
+COPY --from=builder /app/node_modules/@prisma ./node_modules/@prisma
+
+# Copiar dist compilado
+COPY --from=builder /app/dist ./dist
+
+EXPOSE 3002
+CMD ["node", "dist/src/main.js"]
+
+2. Problema con --omit=dev eliminando Prisma
+El problema puede ser que npm install --omit=dev está eliminando dependencias necesarias.
+Prueba esta versión más simple del Dockerfile:
+dockerfile# --- Build Stage ---
+FROM node:18-alpine AS builder
+WORKDIR /app
+
+COPY package*.json ./
+RUN npm install
+
+COPY . .
+RUN npx prisma generate
+RUN npm run build
+
+# --- Production Stage ---
+FROM node:18-alpine
+WORKDIR /app
+
+# Copiar TODO desde el builder
+COPY --from=builder /app/package*.json ./
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/prisma ./prisma
+
+EXPOSE 3002
+CMD ["node", "dist/src/main.js"]
+
+3. Verificar que Prisma esté en dependencies no en devDependencies
+bashcat package.json | grep -A 10 '"dependencies"'
+cat package.json | grep -A 10 '"devDependencies"'
+Prisma debe estar en dependencies:
+json{
+  "dependencies": {
+    "@prisma/client": "^5.x.x"
+  },
+  "devDependencies": {
+    "prisma": "^5.x.x"
+  }
+}
+Si @prisma/client está en devDependencies, muévelo a dependencies:
+bashnpm install @prisma/client --save
+npm install prisma --save-dev
+
+Probemos la solución más directa
+Usa este Dockerfile simplificado que copia todo incluyendo node_modules:
+dockerfileFROM node:18-alpine
+
+WORKDIR /app
+
+# Copiar archivos de dependencias
+COPY package*.json ./
+
+# Instalar todas las dependencias (incluso dev para estar seguros)
+RUN npm install
+
+# Copiar todo el código
+COPY . .
+
+# Generar Prisma
+RUN npx prisma generate
+
+# Compilar
+RUN npm run build
+
+EXPOSE 3002
+
+CMD ["node", "dist/src/main.js"]
+
+Aplicar cambios
+bash# 1. Respaldar Dockerfile actual
+cp Dockerfile Dockerfile.backup
+
+# 2. Editar con el nuevo contenido
+nano Dockerfile
+# (pega el Dockerfile simplificado de arriba)
+
+# 3. Reconstruir sin caché
+docker-compose down
+docker-compose build --no-cache
+
+# 4. Iniciar
+docker-compose up -d
+
+# 5. Ver logs EN TIEMPO REAL
+docker logs -f api_lavanderia
+
+Debugging adicional
+Si sigue fallando, revisa dentro del contenedor si Prisma se generó:
+bash# Entrar al contenedor
+docker exec -it api_lavanderia sh
+
+# Verificar que Prisma Client existe
+ls -la node_modules/.prisma/
+ls -la node_modules/@prisma/
+
+# Verificar que los enums están disponibles
+cat node_modules/.prisma/client/index.d.ts | grep "enum"
+
+# Salir
+exit
+
+Prueba primero con el Dockerfile simplificado (el último que puse) y dime qué pasa. Eso debería funcionar igual que tu entorno local. 🚀
+        
+            
+            
+            
+            
+        
+        Yfunciono casi al 100% pero falla en 1 dependencia[Nest] 1  - 12/06/2025, 4:11:07 PM     LOG [RouterExplorer] Mapped {/api/analytics/stock-sales, GET} route +0ms
+🔥 Uncaught Exception: ReferenceError: crypto is not defined
+    at SchedulerOrchestrator.addCron (/app/node_modules/@nestjs/schedule/dist/scheduler.orchestrator.js:90:38)
+    at ScheduleExplorer.lookupSchedulers (/app/node_modules/@nestjs/schedule/dist/schedule.explorer.js:67:51)
+    at processMethod (/app/node_modules/@nestjs/schedule/dist/schedule.explorer.js:45:24)
+    at Array.forEach (<anonymous>)
+    at /app/node_modules/@nestjs/schedule/dist/schedule.explorer.js:54:18
+    at Array.forEach (<anonymous>)
+    at ScheduleExplorer.explore (/app/node_modules/@nestjs/schedule/dist/schedule.explorer.js:39:26)
+    at ScheduleExplorer.onModuleInit (/app/node_modules/@nestjs/schedule/dist/schedule.explorer.js:32:14)
+    at MapIterator.iteratee (/app/node_modules/@nestjs/core/hooks/on-module-init.hook.js:22:43)
+    at MapIterator.next (/app/node_modules/iterare/lib/map.js:13:39)Mostrar más¡Excelente progreso! El error es que crypto no está disponible en el contenedor Alpine. Esto es porque @nestjs/schedule necesita el módulo crypto de Node.js, pero Alpine Linux puede tener limitaciones.
+Solución rápida: Cambiar a imagen Debian
+Reemplaza node:18-alpine por node:18 (Debian):
+dockerfileFROM node:18
+
+WORKDIR /app
+
+# Copiar archivos de dependencias
+COPY package*.json ./
+
+# Instalar todas las dependencias
+RUN npm install
+
+# Copiar todo el código
+COPY . .
+
+# Generar Prisma
+RUN npx prisma generate
+
+# Compilar
+RUN npm run build
+
+EXPOSE 3002
+
+CMD ["node", "dist/src/main.js"]
+
+Alternativa: Mantener Alpine pero agregar dependencias
+Si prefieres seguir usando Alpine (más liviana), agrega las librerías necesarias:
+dockerfileFROM node:18-alpine
+
+WORKDIR /app
+
+# Instalar dependencias del sistema necesarias para crypto
+RUN apk add --no-cache \
+    python3 \
+    make \
+    g++ \
+    libc6-compat
+
+# Copiar archivos de dependencias
+COPY package*.json ./
+
+# Instalar todas las dependencias
+RUN npm install
+
+# Copiar todo el código
+COPY . .
+
+# Generar Prisma
+RUN npx prisma generate
+
+# Compilar
+RUN npm run build
+
+EXPOSE 3002
+
+CMD ["node", "dist/src/main.js"]
+
+Aplicar los cambios
+bash# Editar Dockerfile
+nano Dockerfile
+
+# Reconstruir sin caché
+docker-compose down
+docker-compose build --no-cache
+
+# Iniciar
+docker-compose up -d
+
+# Ver logs
+docker logs -f api_lavanderia
+
+Recomendación
+Te sugiero usar node:18 (Debian) en lugar de Alpine porque:
+
+✅ Tiene todas las librerías nativas necesarias
+✅ Menos problemas de compatibilidad
+✅ Mejor soporte para módulos nativos de Node.js
+⚠️ Es ~100MB más pesada, pero vale la pena por la estabilidad
+
+
+Prueba con node:18 (sin -alpine) y debería funcionar al 100%. 🚀
+Dime cómo te va.
+        
+            
+            
+            
+            
+        
+        Yya uinstale node 18 sin alpine y sigo con errorInteresante. Si sigues con el error crypto is not defined en node:18 (Debian), entonces el problema es diferente.
+Diagnóstico: Ver versiones y módulos
+bash# Ver logs completos del inicio
+docker logs api_lavanderia 2>&1 | head -100
+
+# Entrar al contenedor
+docker exec -it api_lavanderia sh
+
+# Verificar que crypto existe
+node -e "console.log(require('crypto'))"
+
+# Ver versión de Node
+node -v
+
+# Ver versión de @nestjs/schedule
+npm list @nestjs/schedule
+
+# Salir
+exit
+
+Solución 1: Importar crypto explícitamente en main.ts
+Edita tu src/main.ts y agrega al inicio:
+typescriptimport * as crypto from 'crypto';
+
+// Asegurar que crypto está disponible globalmente
+if (!global.crypto) {
+  (global as any).crypto = crypto;
+}
+
+async function bootstrap() {
+  // ... resto del código
+}
+
+Solución 2: Actualizar @nestjs/schedule
+El error puede ser por una versión antigua de @nestjs/schedule. Actualiza:
+bash# En local
+npm install @nestjs/schedule@latest
+npm install
+
+# Commit y push
+git add package.json package-lock.json
+git commit -m "Update @nestjs/schedule"
+git push
+
+# En VPS
+cd /var/www/html/api.namiatech.com/lavanderia-backend
+git pull
+docker-compose down
+docker-compose build --no-cache
+docker-compose up -d
+docker logs -f api_lavanderia
+
+Solución 3: Polyfill de crypto
+Si usas una versión vieja de Node o hay conflicto, agrega un polyfill.
+Crea el archivo src/crypto-polyfill.ts:
+typescriptimport { webcrypto } from 'crypto';
+
+if (!globalThis.crypto) {
+  (globalThis as any).crypto = webcrypto;
+}
+E impórtalo al inicio de src/main.ts:
+typescriptimport './crypto-polyfill'; // ← Primero de todo
+
+import { NestFactory } from '@nestjs/core';
+// ... resto de imports
+
+Solución 4: Verificar tu Dockerfile final
+Asegúrate de que tu Dockerfile actual sea exactamente así:
+dockerfileFROM node:18
+
+WORKDIR /app
+
+COPY package*.json ./
+RUN npm install
+
+COPY . .
+RUN npx prisma generate
+RUN npm run build
+
+EXPOSE 3002
+
+CMD ["node", "dist/src/main.js"]
+
+Solución 5: Verificar package.json
+Muéstrame:
+bashcat package.json | grep -A 30 '"dependencies"'
+Específicamente busca la versión de @nestjs/schedule.
+
+Debugging avanzado
+Si nada funciona, dame el output de:
+bash# Ver el error completo con stack trace
+docker logs api_lavanderia 2>&1 > error.log
+cat error.log
+
+# Ver versión de NestJS
+cat package.json | grep "@nestjs/core"
+
+# Ver si hay archivos de cron/schedule
+find src/ -name "*schedule*" -o -name "*cron*"
+
+Prueba Solución 1 + Solución 2 combinadas (importar crypto en main.ts Y actualizar @nestjs/schedule). Eso debería resolverlo.
+¿Cuál es la versión de @nestjs/schedule en tu package.json?
+        
+            
+            
+            
+            
+        
+        Yroot@namiatech:~# docker exec -it api_lavanderia sh
+# root@namiatech:~# ls
+root@namiatech:~# ñs
+ñs: command not found
+root@namiatech:~# l
+root@namiatech:~# node -e "console.log(require('crypto'))"
+Command 'node' not found, but can be installed with:
+apt install nodejs
+root@namiatech:~# node -v
+Command 'node' not found, but can be installed with:
+apt install nodejs
+root@namiatech:~# docker ps
+CONTAINER ID   IMAGE                    COMMAND                  CREATED       STATUS                          PORTS                                         NAMES
+ca84d1a7eaed   lavanderia-backend_api   "docker-entrypoint.s…"   5 hours ago   Restarting (0) 36 seconds ago                                                 api_lavanderia
+747d8a378d27   postgres:15              "docker-entrypoint.s…"   5 hours ago   Up 5 hours                      0.0.0.0:5434->5432/tcp, [::]:5434->5432/tcp   lavanderiadb
+root@namiatech:~#Mostrar másAh, veo el problema. Estás ejecutando node en el host (VPS) en lugar de dentro del contenedor. El contenedor está en loop de reinicio.
+Entrar correctamente al contenedor
+bash# Primero, detén el loop de reinicio
+docker-compose -f /var/www/html/api.namiatech.com/lavanderia-backend/docker-compose.yml down
+
+# Inicia el contenedor en modo interactivo para ver el error
+cd /var/www/html/api.namiatech.com/lavanderia-backend
+docker-compose run --rm api sh
+Una vez dentro del contenedor:
+bash# Ahora sí, prueba crypto
+node -e "console.log(require('crypto'))"
+
+# Ver versión de node
+node -v
+
+# Salir
+exit
+
+O ver el error completo directamente
+bashcd /var/www/html/api.namiatech.com/lavanderia-backend
+
+# Ver últimas 100 líneas del log
+docker logs api_lavanderia 2>&1 | tail -100
+
+# O guardar todo el log
+docker logs api_lavanderia 2>&1 > /tmp/api_error.log
+cat /tmp/api_error.log
+
+Solución más directa: Fix en el código
+Ya que el contenedor está reiniciando constantemente, es mejor arreglar el código primero:
+1. Agrega el polyfill de crypto en src/main.ts
+bashcd /var/www/html/api.namiatech.com/lavanderia-backend
+nano src/main.ts
+Agrega al INICIO del archivo (primera línea):
+typescriptimport { webcrypto } from 'crypto';
+if (!globalThis.crypto) {
+  (globalThis as any).crypto = webcrypto;
+}
+
+import { NestFactory } from '@nestjs/core';
+// ... resto del código
+2. Guarda y reconstruye
+bash# Guardar (Ctrl+O, Enter, Ctrl+X)
+
+# Reconstruir
+docker-compose down
+docker-compose build --no-cache
+docker-compose up -d
+
+# Ver logs en tiempo real
+docker logs -f api_lavanderia
+
+Alternativa: Actualizar @nestjs/schedule
+bashcd /var/www/html/api.namiatech.com/lavanderia-backend
+
+# Ver versión actual
+cat package.json | grep "@nestjs/schedule"
+
+# Si es menor a 4.0, actualizar
+nano package.json
+Busca la línea de @nestjs/schedule y cámbiala a:
+json"@nestjs/schedule": "^4.0.0",
+Luego:
+bash# Guardar y salir
+
+# NO ejecutes npm install aquí (lo hará Docker)
+git add package.json
+git commit -m "Update @nestjs/schedule to fix crypto error"
+git push  # Si usas git
+
+# Reconstruir Docker
+docker-compose down
+docker-compose build --no-cache
+docker-compose up -d
+docker logs -f api_lavanderia
+
+Debugging: Ver qué archivo usa schedule/cron
+bashcd /var/www/html/api.namiatech.com/lavanderia-backend
+
+# Buscar donde usas @Cron o @Schedule
+grep -r "@Cron\|@Schedule" src/ --include="*.ts"
+Si encuentras archivos, muéstramelos para ver si podemos comentar temporalmente los crons mientras arreglamos el problema.
+
+Prioridad: Prueba primero agregar el polyfill de crypto en main.ts (la primera solución). Eso debería resolver el problema inmediatamente.
+Muéstrame el contenido de tu src/main.ts actual:
+bashcat /var/www/html/api.namiatech.com/lavanderia-backend/src/main.ts
+        
+            
+            
+            
+            
+        
+        root@namiatech:~# docker exec -it api_lavanderia sh
+# root@namiatech:~# ls
+root@namiatech:~# ñs
+ñs: command not found
+root@namiatech:~# l
+root@namiatech:~# node -e "console.log(require('crypto'))"
+Command 'node' not found, but can be installed with:
+apt install nodejs
+root@namiatech:~# node pastedYveo esto, pro si ves el error es de un nodemodule no de mi app
+esto veo en los pasos quie me diste si esta crypto¡Perfecto! Crypto SÍ está disponible en el contenedor. El problema es que @nestjs/schedule está intentando acceder a crypto de una forma incorrecta.
+El error dice que está en /app/node_modules/@nestjs/schedule/dist/scheduler.orchestrator.js:90:38, lo que significa que es un bug de esa librería con ciertas versiones de Node.js.
+Solución: Actualizar @nestjs/schedule
+bashcd /var/www/html/api.namiatech.com/lavanderia-backend
+
+# Ver versión actual
+cat package.json | grep "@nestjs/schedule"
+Muéstrame qué versión tienes. Probablemente sea algo como "@nestjs/schedule": "^3.x.x" o "^2.x.x".
+
+Fix: Actualizar package.json
+Edita el archivo:
+bashnano package.json
+Busca la línea de @nestjs/schedule y cámbiala a la versión 4.1.0 o superior:
+json"@nestjs/schedule": "^4.1.0",
+También actualiza @nestjs/core y otros paquetes NestJS a la misma versión mayor (si tienes @nestjs/core: ^9.x.x, actualiza a ^10.x.x):
+json"@nestjs/common": "^10.0.0",
+"@nestjs/core": "^10.0.0",
+"@nestjs/schedule": "^4.1.0",
+Guarda (Ctrl+O, Enter, Ctrl+X).
+
+Reconstruir
+bash# Eliminar package-lock.json para forzar actualización
+rm package-lock.json
+
+# Reconstruir Docker
+docker-compose down
+docker-compose build --no-cache
+docker-compose up -d
+
+# Ver logs
+docker logs -f api_lavanderia
+
+Alternativa: Si no puedes actualizar @nestjs/schedule
+Si por alguna razón no puedes actualizar, deshabilita temporalmente el módulo de schedule.
+Busca en tu código donde importas ScheduleModule:
+bashgrep -r "ScheduleModule" src/ --include="*.ts"
+Luego comenta la importación en tu app.module.ts:
+typescript// import { ScheduleModule } from '@nestjs/schedule';
+
+@Module({
+  imports: [
+    // ScheduleModule.forRoot(),  // ← Comentar esto temporalmente
+    // ... otros módulos
+  ],
+})
+Y comenta los decoradores @Cron() en tus servicios:
+bash# Buscar archivos con @Cron
+grep -r "@Cron" src/ --include="*.ts"
+
+Lo más probable
+Necesitas actualizar @nestjs/schedule a la versión 4.x. Muéstrame:
+bashcat package.json | grep -E '"@nestjs/(common|core|schedule)"'
+Para que te diga exactamente qué versiones poner. 🔧
+        
+            
+            
+            
+            
+        
+        Ytengo         "@nestjs/schedule": "^6.0.1",pero porque demonios falla, ayudam,e a resolverlo eficientemente¡Tienes la versión 6.0.1 que es la más reciente! El problema entonces NO es la versión, sino cómo @nestjs/schedule está intentando acceder a crypto.
+El problema real
+@nestjs/schedule v6 usa crypto.randomUUID() pero está buscando crypto en el objeto global (globalThis.crypto o global.crypto) en lugar de importarlo como módulo de Node.js.
+Solución definitiva: Polyfill global
+Edita tu src/main.ts y agrega AL INICIO (primera línea):
+bashcd /var/www/html/api.namiatech.com/lavanderia-backend
+nano src/main.ts
+Agrega esto ANTES de cualquier otro import:
+typescriptimport { webcrypto } from 'node:crypto';
+
+// Polyfill global de crypto para @nestjs/schedule v6
+if (!globalThis.crypto) {
+  (globalThis as any).crypto = webcrypto;
+}
+
+// Ahora sí tus imports normales
+import { NestFactory } from '@nestjs/core';
+import { AppModule } from './app.module';
+// ... resto del código
+
+Aplicar cambios
+bash# Guardar el archivo (Ctrl+O, Enter, Ctrl+X)
+
+# Reconstruir SIN caché
+docker-compose down
+docker-compose build --no-cache
+
+# Iniciar
+docker-compose up -d
+
+# Ver logs en tiempo real
+docker logs -f api_lavanderia
+
+Si aún falla: Verifica el import
+El problema puede ser que en Node 18 el import debe ser node:crypto en lugar de solo crypto.
+Asegúrate de que tu main.ts tenga exactamente esto al inicio:
+typescriptimport { webcrypto } from 'node:crypto';
+
+if (!globalThis.crypto) {
+  (globalThis as any).crypto = webcrypto;
+}
+
+¿Por qué pasa esto?
+@nestjs/schedule v6 usa Web Crypto API (globalThis.crypto), que está disponible en Node 18+ pero solo en ciertos contextos. En Docker, a veces no se inicializa automáticamente, por eso necesitas el polyfill.
+
+Aplica el fix en main.ts y reconstruye. Esto debería resolver el problema al 100%. 🚀
+Muéstrame el resultado después de aplicar el cambio.
+        
+            
+            
+            
+            
+        
+        Yimport { webcrypto } from 'node:crypto';
+if (!globalThis.crypto) {
+  (globalThis as any).crypto = webcrypto;
+}
+import { NestFactory } from '@nestjs/core';
+import { AppModule } from './app.module';
+import { ValidationPipe } from '@nestjs/common';
+// import { RolesGuard } from './auth/guards/roles.guard';
+// import { Reflector } from '@nestjs/core'; // 👈 necesario
+import { inspect } from 'util';
+process.on('uncaughtException', (err) => {
+  console.error('🔥 Uncaught Exception:', inspect(err, { depth: null }));
+});
+async function bootstrap() {
+  console.log('JWT_SEED:', process.env.JWT_SEED); // <-- Log de depuración
+  const app = await NestFactory.create(AppModule);
+  app.enableCors({
+    origin: 'http://localhost:5173',
+    credentials: true,
+  });  app.setGlobalPrefix('api');
+  // app.useGlobalPipes(sigue fallando, en dev local lo probe build npm run build y nom start prod pero no fallo, en vops fallaMostrar másEl problema es que el polyfill se está agregando después de otros imports que pueden estar cargando @nestjs/schedule indirectamente. Necesitamos asegurarnos de que el polyfill se ejecute ANTES que cualquier cosa.
+Solución: Crear un archivo de polyfill separado
+1. Crea el archivo de polyfill
+bashcd /var/www/html/api.namiatech.com/lavanderia-backend
+nano src/polyfills.ts
+Contenido del archivo src/polyfills.ts:
+typescriptimport { webcrypto } from 'node:crypto';
+
+// Polyfill para @nestjs/schedule v6 en Docker
+if (!globalThis.crypto) {
+  (globalThis as any).crypto = webcrypto;
+}
+
+// También asegurar que crypto.randomUUID existe
+if (globalThis.crypto && !globalThis.crypto.randomUUID) {
+  (globalThis.crypto as any).randomUUID = webcrypto.randomUUID.bind(webcrypto);
+}
+Guarda (Ctrl+O, Enter, Ctrl+X).
+
+2. Modifica main.ts para importarlo PRIMERO
+bashnano src/main.ts
+Cambia a esto (el import de polyfills debe ser LA PRIMERA LÍNEA):
+typescriptimport './polyfills';  // ← DEBE SER LA PRIMERA LÍNEA
+
+import { NestFactory } from '@nestjs/core';
+import { AppModule } from './app.module';
+import { ValidationPipe } from '@nestjs/common';
+import { inspect } from 'util';
+
+process.on('uncaughtException', (err) => {
+  console.error('🔥 Uncaught Exception:', inspect(err, { depth: null }));
+});
+
+async function bootstrap() {
+  console.log('JWT_SEED:', process.env.JWT_SEED);
+  const app = await NestFactory.create(AppModule);
+  app.enableCors({
+    origin: 'http://localhost:5173',
+    credentials: true,
+  });
+  
+  app.setGlobalPrefix('api');
+  // ... resto del código
+}
+
+bootstrap();
+
+3. Modifica el Dockerfile para imprimir el error completo
+bashnano Dockerfile
+Cambia el CMD para ver mejor los errores:
+dockerfileFROM node:18
+
+WORKDIR /app
+
+COPY package*.json ./
+RUN npm install
+
+COPY . .
+RUN npx prisma generate
+RUN npm run build
+
+EXPOSE 3002
+
+# Agregar más logging
+CMD ["node", "--trace-warnings", "dist/src/main.js"]
+
+4. Reconstruir completamente
+bash# Limpiar todo
+docker-compose down -v
+docker system prune -f
+
+# Reconstruir sin caché
+docker-compose build --no-cache
+
+# Iniciar
+docker-compose up -d
+
+# Ver logs completos
+docker logs -f api_lavanderia
+
+Alternativa: Verificar si el problema es de compilación
+El problema podría ser que TypeScript no está compilando correctamente el polyfill. Verifica tu tsconfig.json:
+bashcat tsconfig.json | grep -A 5 "compilerOptions"
+Asegúrate de que tenga:
+json{
+  "compilerOptions": {
+    "module": "commonjs",
+    "target": "ES2021",
+    "lib": ["ES2021"],
+    // ... resto
+  }
+}
+
+Debug: Ver qué se está compilando
+bash# Después de hacer docker-compose build, inspecciona el contenedor
+docker-compose run --rm api sh
+
+# Dentro del contenedor
+ls -la dist/src/
+cat dist/src/polyfills.js
+cat dist/src/main.js | head -20
+
+# Salir
+exit
+
+Si NADA funciona: Downgrade temporal
+Como último recurso, baja a @nestjs/schedule v4:
+bashnano package.json
+Cambia:
+json"@nestjs/schedule": "^4.0.2",
+bashrm package-lock.json
+docker-compose down
+docker-compose build --no-cache
+docker-compose up -d
+
+Prioridad: Aplica los pasos 1, 2, 3 y 4. El archivo polyfills.ts separado + importarlo como primera línea en main.ts debería funcionar.
+Muéstrame los logs después de aplicar estos cambios. 🔧
+        
+            
+            
+            
+            
+        
+        Yal hacer docker build5.033 npm error For a full report see:
+5.033 npm error /root/.npm/_logs/2025-12-06T22_02_14_331Z-eresolve-report.txt
+5.038 npm notice
+5.038 npm notice New major version of npm available! 10.8.2 -> 11.6.4
+5.038 npm notice Changelog: https://github.com/npm/cli/releases/tag/v11.6.4
+5.038 npm notice To update run: npm install -g npm@11.6.4
+5.038 npm notice
+5.039 npm error A complete log of this run can be found in: /root/.npm/_logs/2025-12-06T22_02_14_331Z-debug-0.log
+------
+Dockerfile:21
+--------------------
+  19 |
+  20 |     COPY package*.json ./
+  21 | >>> RUN npm install --omit=dev
+  22 |
+  23 |     COPY --from=builder /app/prisma ./prisma
+--------------------
+ERROR: failed to build: failed to solve: process "/bin/sh -c npm install --omit=dev" did not complete successfully: exit code: 1
+ERROR: Service 'api' failed to build : Build failedMostrar másEl problema es que estás usando un Dockerfile con multi-stage build y --omit=dev está causando conflictos de dependencias.
+Solución: Usa el Dockerfile simple que funcionaba antes
+bashcd /var/www/html/api.namiatech.com/lavanderia-backend
+nano Dockerfile
+Reemplaza TODO el contenido con esto:
+dockerfileFROM node:18
+
+WORKDIR /app
+
+COPY package*.json ./
+RUN npm install
+
+COPY . .
+RUN npx prisma generate
+RUN npm run build
+
+EXPOSE 3002
+
+CMD ["node", "--trace-warnings", "dist/src/main.js"]
+Guarda (Ctrl+O, Enter, Ctrl+X).
+
+Reconstruir
+bashdocker-compose down
+docker-compose build --no-cache
+docker-compose up -d
+docker logs -f api_lavanderia
+
+¿Por qué fallaba el multi-stage?
+El problema con --omit=dev es que:
+
+Elimina @nestjs/cli, typescript, etc. que son necesarios en producción
+Crea conflictos de peer dependencies
+No copia correctamente los tipos generados de Prisma
+
+El Dockerfile simple instala TODO y funciona perfectamente. La imagen será ~100MB más grande, pero es 100% funcional.
+
+Verificar que polyfills.ts existe
+bashls -la src/polyfills.ts
+cat src/polyfills.ts
+Si no existe, créalo:
+bashcat > src/polyfills.ts << 'EOF'
+import { webcrypto } from 'node:crypto';
+
+if (!globalThis.crypto) {
+  (globalThis as any).crypto = webcrypto;
+}
+
+if (globalThis.crypto && !globalThis.crypto.randomUUID) {
+  (globalThis.crypto as any).randomUUID = webcrypto.randomUUID.bind(webcrypto);
+}
+EOF
+
+Verificar main.ts
+bashhead -5 src/main.ts
+Debe mostrar:
+typescriptimport './polyfills';  // ← PRIMERA LÍNEA
+
+import { NestFactory } from '@nestjs/core';
+Si no, edita:
+bashnano src/main.ts
+Y asegúrate de que import './polyfills'; sea la PRIMERA LÍNEA.
+
+Aplica estos cambios y debería funcionar. El Dockerfile simple + polyfills.ts + import en main.ts es la solución completa. 🚀
+        
+            
+            
+            
+            
+        
+        Yosea esto ya lo borro, # --- Build Stage ---
+FROM node:18 AS builder
+WORKDIR /app
+COPY package*.json ./
+COPY prisma ./prisma
+RUN npm install
+RUN npx prisma generate
+COPY . .
+RUN npm run build
+# --- Production Stage ---
+FROM node:18
+WORKDIR /app
+COPY package*.json ./
+RUN npm install --omit=dev
+COPY --from=builder /app/prisma ./prisma
+RUN npx prisma generate
+COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
+COPY --from=builder /app/node_modules/@prisma ./node_modules/@prisma
+COPY --from=builder /app/dist ./dist
+EXPOSE 3002
+CMD ["node", "dist/src/main.js"]???Mostrar másSÍ, borra todo eso. Reemplázalo con el Dockerfile simple:
+bashnano Dockerfile
+Borra TODO y reemplaza con esto:
+dockerfileFROM node:18
+
+WORKDIR /app
+
+COPY package*.json ./
+RUN npm install
+
+COPY . .
+RUN npx prisma generate
+RUN npm run build
+
+EXPOSE 3002
+
+CMD ["node", "--trace-warnings", "dist/src/main.js"]
+Guarda (Ctrl+O, Enter, Ctrl+X).
+
+¿Por qué?
+El multi-stage build complica las cosas innecesariamente:
+
+--omit=dev elimina dependencias necesarias
+Copiar selectivamente archivos puede romper cosas
+Más capas = más puntos de falla
+
+El Dockerfile simple:
+
+✅ Instala TODO (dev + prod dependencies)
+✅ Genera Prisma correctamente
+✅ Compila TypeScript sin problemas
+✅ Funciona igual que tu entorno local
+
+
+Ahora reconstruye
+bashdocker-compose down
+docker-compose build --no-cache
+docker-compose up -d
+docker logs -f api_lavanderia
+
+La imagen será ~200-300MB en lugar de ~150MB, pero FUNCIONARÁ. En producción, la estabilidad > tamaño de imagen. 🎯
+        
+            
+            
+            
+            
+        
+        Ycada ves que haga cambios de codigo en backend que debo hacer para actualizar despliege prod con dockerFlujo de actualización en producción
+Opción 1: Rebuild completo (más seguro, recomendado)
+bashcd /var/www/html/api.namiatech.com/lavanderia-backend
+
+# 1. Pull los cambios de git (si usas git)
+git pull
+
+# 2. Detener contenedores
+docker-compose down
+
+# 3. Reconstruir la imagen
+docker-compose build --no-cache
+
+# 4. Iniciar
+docker-compose up -d
+
+# 5. Ver logs para verificar
+docker logs -f api_lavanderia
+
+Opción 2: Rebuild rápido (sin --no-cache, usa caché de Docker)
+bashcd /var/www/html/api.namiatech.com/lavanderia-backend
+
+git pull
+docker-compose down
+docker-compose build  # ← sin --no-cache, más rápido
+docker-compose up -d
+docker logs -f api_lavanderia
+
+Opción 3: Hot reload sin rebuild (solo para cambios pequeños de código)
+Si solo cambiaste código TypeScript (no package.json, no Dockerfile):
+bashcd /var/www/html/api.namiatech.com/lavanderia-backend
+
+git pull
+docker-compose restart api
+docker logs -f api_lavanderia
+⚠️ Esto NO funciona si:
+
+Cambiaste package.json (nuevas dependencias)
+Cambiaste Dockerfile
+Cambiaste prisma/schema.prisma
+
+
+Cuándo usar cada opción
+CambioComandoSolo código TS/JSdocker-compose restart apiAgregaste dependencias npmdocker-compose build && docker-compose up -dCambiaste Prisma schemadocker-compose build --no-cache && docker-compose up -dCambiaste Dockerfiledocker-compose build --no-cache && docker-compose up -dCambios grandes/dudasdocker-compose down && docker-compose build --no-cache && docker-compose up -d
+
+Script automatizado (RECOMENDADO)
+Crea un script para no teclear siempre:
+bashnano ~/deploy-lavanderia.sh
+Contenido:
+bash#!/bin/bash
+cd /var/www/html/api.namiatech.com/lavanderia-backend
+
+echo "📥 Pulling latest changes..."
+git pull
+
+echo "🛑 Stopping containers..."
+docker-compose down
+
+echo "🔨 Building image..."
+docker-compose build --no-cache
+
+echo "🚀 Starting containers..."
+docker-compose up -d
+
+echo "📋 Showing logs..."
+docker logs -f api_lavanderia
+Dar permisos:
+bashchmod +x ~/deploy-lavanderia.sh
+Usar:
+bash~/deploy-lavanderia.sh
+
+Zero-downtime deployment (avanzado)
+Si quieres evitar downtime, usa:
+bashdocker-compose build
+docker-compose up -d --no-deps --build api
+Esto reconstruye y reinicia solo el contenedor API sin afectar la base de datos.
+
+Resumen rápido
+Cambio normal de código:
+bashcd /var/www/html/api.namiatech.com/lavanderia-backend
+git pull
+docker-compose down
+docker-compose build
+docker-compose up -d
+Ante dudas o errores:
+bashcd /var/www/html/api.namiatech.com/lavanderia-backend
+git pull
+docker-compose down
+docker-compose build --no-cache
+docker-compose up -d
+docker logs -f api_lavanderia
+🎯 El flujo más común será: pull → down → build → up
+        
+            
+            
+            
+            
+        
+        Yyo subo mis cambios a github y quisiera hacer CD automatico# 2. Detener contenedores docker-compose down # 3. Reconstruir la imagen docker-compose build --no-cache # 4. Iniciar docker-compose up -dCD Automático con GitHub Actions
+Voy a crear un flujo de CI/CD que se ejecute automáticamente cuando hagas push a GitHub.
+1. Crear GitHub Action
+En tu repositorio local, crea la carpeta y archivo:
+bashcd /var/www/html/api.namiatech.com/lavanderia-backend
+
+mkdir -p .github/workflows
+nano .github/workflows/deploy.yml
+Contenido del archivo:
+yamlname: Deploy to VPS
+
+on:
+  push:
+    branches:
+      - main  # o 'master' según tu rama principal
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: 🚀 Deploy to VPS
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            cd /var/www/html/api.namiatech.com/lavanderia-backend
+            git pull origin main
+            docker-compose down
+            docker-compose build --no-cache
+            docker-compose up -d
+            docker logs --tail 50 api_lavanderia
+Guarda (Ctrl+O, Enter, Ctrl+X).
+
+2. Configurar Secrets en GitHub
+Ve a tu repositorio en GitHub:
+Ir a Settings → Secrets and variables → Actions → New repository secret
+Crea estos 3 secrets:
+Secret 1: VPS_HOST
+
+Name: VPS_HOST
+Value: Tu IP o dominio del VPS (ejemplo: 123.45.67.89 o namiatech.com)
+
+Secret 2: VPS_USER
+
+Name: VPS_USER
+Value: root (o el usuario que uses)
+
+Secret 3: VPS_SSH_KEY
+
+Name: VPS_SSH_KEY
+Value: Tu clave privada SSH
+
+Para obtener la clave privada:
+bash# En tu computadora local (NO en el VPS)
+cat ~/.ssh/id_rsa
+Copia TODO el contenido (incluyendo -----BEGIN ... KEY----- y -----END ... KEY-----) y pégalo en el secret.
+Si no tienes clave SSH configurada:
+bash# En tu computadora local
+ssh-keygen -t rsa -b 4096 -C "tu-email@example.com"
+# Presiona Enter 3 veces (sin passphrase)
+
+# Copiar clave pública al VPS
+ssh-copy-id root@TU_VPS_IP
+
+# Probar conexión
+ssh root@TU_VPS_IP
+
+3. Commitear y pushear el workflow
+bashgit add .github/workflows/deploy.yml
+git commit -m "Add automatic deployment with GitHub Actions"
+git push origin main
+
+4. Verificar que funciona
+
+Ve a tu repositorio en GitHub
+Click en la pestaña "Actions"
+Deberías ver el workflow ejecutándose
+Click en el workflow para ver los logs en tiempo real
+
+
+5. Flujo de trabajo desde ahora
+bash# 1. Haces cambios en tu código local
+# 2. Commit
+git add .
+git commit -m "feat: nueva funcionalidad"
+
+# 3. Push
+git push origin main
+
+# 4. GitHub Actions se encarga del resto automáticamente ✨
+
+Mejoras opcionales
+A) Deploy solo en rama específica
+Si quieres deployar solo cuando hagas merge a production:
+yamlon:
+  push:
+    branches:
+      - production  # Solo deploya en esta rama
+B) Notificación en Slack/Discord
+Agrega al final del script:
+yamlscript: |
+  cd /var/www/html/api.namiatech.com/lavanderia-backend
+  git pull origin main
+  docker-compose down
+  docker-compose build --no-cache
+  docker-compose up -d
+  echo "✅ Deploy completado en $(date)"
+C) Rollback automático si falla
+yamlscript: |
+  cd /var/www/html/api.namiatech.com/lavanderia-backend
+  git pull origin main
+  docker-compose down
+  docker-compose build --no-cache
+  docker-compose up -d
+  
+  # Esperar 10 segundos y verificar que el contenedor está corriendo
+  sleep 10
+  if ! docker ps | grep -q api_lavanderia; then
+    echo "❌ Deploy falló, haciendo rollback..."
+    git reset --hard HEAD~1
+    docker-compose down
+    docker-compose build --no-cache
+    docker-compose up -d
+    exit 1
+  fi
+  
+  echo "✅ Deploy exitoso"
+D) Deploy múltiples ramas a diferentes entornos
+yamlname: Deploy
+
+on:
+  push:
+    branches:
+      - main
+      - staging
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Set environment
+        id: env
+        run: |
+          if [ "${{ github.ref }}" == "refs/heads/main" ]; then
+            echo "path=/var/www/html/api.namiatech.com/lavanderia-backend" >> $GITHUB_OUTPUT
+          else
+            echo "path=/var/www/html/staging.api.namiatech.com/lavanderia-backend" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Deploy
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            cd ${{ steps.env.outputs.path }}
+            git pull origin ${{ github.ref_name }}
+            docker-compose down
+            docker-compose build --no-cache
+            docker-compose up -d
+
+Troubleshooting
+Error: "Permission denied (publickey)"
+Verifica que la clave SSH esté correcta:
+bash# En tu local
+cat ~/.ssh/id_rsa
+
+# En el VPS
+cat ~/.ssh/authorized_keys
+Error: "Host key verification failed"
+Agrega StrictHostKeyChecking=no al workflow:
+yaml- name: Deploy
+  uses: appleboy/ssh-action@v1.0.0
+  with:
+    host: ${{ secrets.VPS_HOST }}
+    username: ${{ secrets.VPS_USER }}
+    key: ${{ secrets.VPS_SSH_KEY }}
+    script_stop: true
+    command_timeout: 10m
+    script: |
+      # ... tu script
+
+¡Listo! Ahora cada git push desplegará automáticamente tu backend. 🚀
+        
+            
+            
+            
+            
+        
+        Ysi el folder no existe o si existe ya esta cubierto?name: Deploy to VPS
+on:
+  push:
+    branches:
+      - main
+jobs:
+  deploy:
+    runs-on: ubuntu-latest    steps:
+      - name: 🚀 Deploy to VPS
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USER }}
+          key: ${{ secrets.KEY }}
+          script: |
+            cd /var/www/html/api.namiatech.com/lavanderia-backend
+            git pull origin main
+            docker-compose down
+            docker-compose build --no-cache
+            docker-compose up -d
+            docker logs --tail 50 api_lavanderiaMostrar másBuen punto. El workflow actual asume que el folder ya existe. Si no existe, fallará en el cd.
+Workflow mejorado con verificación de folder
+yamlname: Deploy to VPS
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: 🚀 Deploy to VPS
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USER }}
+          key: ${{ secrets.KEY }}
+          script: |
+            # Crear directorio si no existe
+            mkdir -p /var/www/html/api.namiatech.com
+            
+            # Si el folder lavanderia-backend no existe, clonar
+            if [ ! -d "/var/www/html/api.namiatech.com/lavanderia-backend" ]; then
+              echo "📦 Clonando repositorio por primera vez..."
+              cd /var/www/html/api.namiatech.com
+              git clone https://github.com/TU_USUARIO/TU_REPOSITORIO.git lavanderia-backend
+            fi
+            
+            cd /var/www/html/api.namiatech.com/lavanderia-backend
+            git pull origin main
+            docker-compose down
+            docker-compose build --no-cache
+            docker-compose up -d
+            docker logs --tail 50 api_lavanderia
