@@ -28,6 +28,7 @@ export class BusinessPlansController {
     @Query('estado') estado?: string,
     @GetUser() user?: any,
   ) {
+     
     const params: any = {};
     
     // ADMIN solo puede ver su propio plan

@@ -187,32 +187,30 @@ export class BusinessPlansService {
         planFechaFin.setHours(0, 0, 0, 0);
         planFechaFin.setMinutes(0, 0, 0);
 
-        console.log(`🔍 Verificando plan ${bp.id}: estado=${bp.estado}, fechaFin=${planFechaFin.toISOString()}, hoy=${today.toISOString()}, comparación=${planFechaFin >= today}`);
-
+ 
         // Si el plan está marcado como VENCIDO pero la fecha aún no pasó, corregirlo
         if (bp.estado === 'VENCIDO' && planFechaFin >= today) {
-          console.log(`⚠️ Plan ${bp.id} marcado como VENCIDO pero fechaFin (${planFechaFin.toISOString()}) >= hoy (${today.toISOString()}). Corrigiendo a ACTIVO...`);
-          await this.prisma.businessPlan.update({
+           await this.prisma.businessPlan.update({
             where: { id: bp.id },
             data: { estado: 'ACTIVO' },
           });
           bp.estado = 'ACTIVO';
-          console.log(`✅ Plan ${bp.id} corregido: VENCIDO → ACTIVO`);
-        }
+         }
         // Si el plan está marcado como ACTIVO pero la fecha ya pasó, marcarlo como VENCIDO
         else if (bp.estado === 'ACTIVO' && planFechaFin < today) {
-          console.log(`⚠️ Plan ${bp.id} marcado como ACTIVO pero fechaFin (${planFechaFin.toISOString()}) < hoy (${today.toISOString()}). Corrigiendo a VENCIDO...`);
-          await this.prisma.businessPlan.update({
+           await this.prisma.businessPlan.update({
             where: { id: bp.id },
             data: { estado: 'VENCIDO' },
           });
           bp.estado = 'VENCIDO';
-          console.log(`✅ Plan ${bp.id} corregido: ACTIVO → VENCIDO`);
-        }
+         }
 
         return this.formatBusinessPlanResponse(bp);
       })
     );
+
+    console.log({correctedPlans});
+    
 
     return correctedPlans;
   }

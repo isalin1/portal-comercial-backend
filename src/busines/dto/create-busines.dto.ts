@@ -1,4 +1,4 @@
-import { IsString, IsInt, IsEnum, IsNotEmpty } from 'class-validator';
+import { IsString, IsInt, IsEnum, IsNotEmpty, IsOptional } from 'class-validator';
 import { DocType } from '@prisma/client';
 
 export class CreateBusinesDto {
@@ -16,6 +16,10 @@ export class CreateBusinesDto {
   @IsString()
   @IsNotEmpty()
   numdoc: string;
+
+  @IsString()
+  @IsOptional()
+  phone?: string;
 
   @IsInt()
   userId: number;

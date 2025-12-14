@@ -108,6 +108,7 @@ model Busines {
   comercialname String
   doctype       DocType
   numdoc        String
+  phone         String?
 
   createdAt DateTime @default(now()) @map("created_At")
   updatedAt DateTime @updatedAt @map("updated_At")
@@ -351,7 +352,7 @@ model BusinessPlan {
   planId          Int       @map("plan_id")
   fechaInicio     DateTime  @db.Date @map("fecha_inicio")
   fechaFin        DateTime  @db.Date @map("fecha_fin")
-  estado          String    @default("ACTIVO") // 'ACTIVO', 'VENCIDO', 'SUSPENDIDO'
+  estado          String    @default("ACTIVO") // 'ACTIVO', 'VENCIDO', 'SUSPENDIDO', 'INACTIVO'
   fechaPago       DateTime? @db.Date @map("fecha_pago")
   fechaSuspension DateTime? @db.Date @map("fecha_suspension") // Fecha en que se suspendió
   diasSuspendidos Int       @default(0) @map("dias_suspendidos") // Total de días suspendidos acumulados
@@ -438,6 +439,8 @@ enum Roles {
 enum DocType {
   RUC
   DNI
+  CE
+  PASAPORTE
 }
 
 enum ServiceUnit {
