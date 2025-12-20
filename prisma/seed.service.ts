@@ -70,8 +70,25 @@ export class SeedService {
   });
   }
 
+  async setPlans(){
+    const exists = await prisma.plan.findFirst({
+    where: { tipo: 'Sin Plan' },
+  });
+
+  if (exists) return;
+    await prisma.plan.create({
+       data: {        
+        tipo: "Sin Plan",
+        nombrePeriodo: "Sin Plan",
+        diasPeriodo: 0,
+        costo: 0,
+       }
+    })
+  }
+
   async run(){
     await this.setUbigeo() //Solo la primera vez, cuando ya hayan datos reales YA NO
     await this.setUserAdmin()
+    await this.setPlans()
   }
 }
