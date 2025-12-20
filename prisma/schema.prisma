@@ -16,7 +16,7 @@ datasource db {
 
 model Department {
   id        Int        @id @default(autoincrement())
-  name      String     @unique
+  name      String     @db.VarChar(100)
   createdAt DateTime   @default(now()) @map("created_At")
   updatedAt DateTime   @updatedAt @map("updated_At")
   provinces Province[]
@@ -26,7 +26,7 @@ model Department {
 
 model Province {
   id           Int        @id @default(autoincrement())
-  name         String     @unique
+  name         String     @db.VarChar(100)
   createdAt    DateTime   @default(now()) @map("created_At")
   updatedAt    DateTime   @updatedAt @map("updated_At")
   departmentId Int        @map("department_id")
@@ -38,7 +38,7 @@ model Province {
 
 model District {
   id        Int      @id @default(autoincrement())
-  name      String   @unique
+  name      String   @db.VarChar(100)
   createdAt DateTime @default(now()) @map("created_At")
   updatedAt DateTime @updatedAt @map("updated_At")
 
@@ -143,9 +143,9 @@ model PointSale {
 
   serviceorders ServiceOrder[]
 
-  expenses Expense[]
+  expenses          Expense[]
   cashContributions CashContribution[]
-  cashWithdrawals CashWithdrawal[]
+  cashWithdrawals   CashWithdrawal[]
 
   @@map("pointsales")
 }
@@ -229,13 +229,13 @@ model ServiceOrder {
 
 model ItemServiceOrder {
   id           Int         @id @default(autoincrement())
-  code         String?     // Código único: MM-XXXX-YY (orden-categoría)
+  code         String? // Código único: MM-XXXX-YY (orden-categoría)
   statusOrder  StatusOrder @default(RECEIVED) // Estado individual del item
   quantity     Decimal
   totalPrice   Decimal
   numberpieces Int
   subtotal     Decimal
-  observations String?     // Comentarios sobre las prendas recibidas
+  observations String? // Comentarios sobre las prendas recibidas
 
   createdAt DateTime @default(now()) @map("created_At")
   updatedAt DateTime @updatedAt @map("updated_At")
@@ -285,8 +285,8 @@ model Payment {
 model Expense {
   id        Int      @id @default(autoincrement())
   date      DateTime // Fecha del gasto
-  recipient String   // Destinatario del gasto
-  concept   String   // Concepto del gasto (ej: Movilidad, Almuerzo, Internet, etc.)
+  recipient String // Destinatario del gasto
+  concept   String // Concepto del gasto (ej: Movilidad, Almuerzo, Internet, etc.)
   amount    Decimal  @db.Decimal(10, 2) // Monto del gasto
 
   createdAt DateTime @default(now()) @map("created_At")
@@ -299,11 +299,11 @@ model Expense {
 }
 
 model CashContribution {
-  id        Int      @id @default(autoincrement())
-  date      DateTime @db.Date // Fecha del aporte
-  amount    Decimal  @db.Decimal(10, 2) // Monto del aporte
-  concept   String?  // Concepto del aporte (opcional)
-  notes     String?  // Notas adicionales (opcional)
+  id      Int      @id @default(autoincrement())
+  date    DateTime @db.Date // Fecha del aporte
+  amount  Decimal  @db.Decimal(10, 2) // Monto del aporte
+  concept String? // Concepto del aporte (opcional)
+  notes   String? // Notas adicionales (opcional)
 
   createdAt DateTime @default(now()) @map("created_At")
   updatedAt DateTime @updatedAt @map("updated_At")
@@ -316,11 +316,11 @@ model CashContribution {
 }
 
 model CashWithdrawal {
-  id        Int      @id @default(autoincrement())
-  date      DateTime @db.Date // Fecha del retiro
-  amount    Decimal  @db.Decimal(10, 2) // Monto del retiro
-  concept   String?  // Concepto del retiro (opcional)
-  notes     String?  // Notas adicionales (opcional)
+  id      Int      @id @default(autoincrement())
+  date    DateTime @db.Date // Fecha del retiro
+  amount  Decimal  @db.Decimal(10, 2) // Monto del retiro
+  concept String? // Concepto del retiro (opcional)
+  notes   String? // Notas adicionales (opcional)
 
   createdAt DateTime @default(now()) @map("created_At")
   updatedAt DateTime @updatedAt @map("updated_At")
@@ -334,15 +334,15 @@ model CashWithdrawal {
 
 model Plan {
   id            Int      @id @default(autoincrement())
-  tipo          String   // 'premium', 'pro', 'emprendedor'
-  nombrePeriodo String   // 'mensual', 'semestral', 'anual'
-  diasPeriodo   Int      // Días de duración
+  tipo          String // 'premium', 'pro', 'emprendedor'
+  nombrePeriodo String // 'mensual', 'semestral', 'anual'
+  diasPeriodo   Int // Días de duración
   costo         Decimal? @db.Decimal(10, 2)
   createdAt     DateTime @default(now()) @map("created_At")
   updatedAt     DateTime @updatedAt @map("updated_At")
-  
+
   businessPlans BusinessPlan[]
-  
+
   @@map("plans")
 }
 
@@ -350,20 +350,20 @@ model BusinessPlan {
   id              Int       @id @default(autoincrement())
   businesId       Int       @map("busines_id")
   planId          Int       @map("plan_id")
-  fechaInicio     DateTime  @db.Date @map("fecha_inicio")
-  fechaFin        DateTime  @db.Date @map("fecha_fin")
+  fechaInicio     DateTime  @map("fecha_inicio") @db.Date
+  fechaFin        DateTime  @map("fecha_fin") @db.Date
   estado          String    @default("ACTIVO") // 'ACTIVO', 'VENCIDO', 'SUSPENDIDO', 'INACTIVO'
-  fechaPago       DateTime? @db.Date @map("fecha_pago")
-  fechaSuspension DateTime? @db.Date @map("fecha_suspension") // Fecha en que se suspendió
+  fechaPago       DateTime? @map("fecha_pago") @db.Date
+  fechaSuspension DateTime? @map("fecha_suspension") @db.Date // Fecha en que se suspendió
   diasSuspendidos Int       @default(0) @map("dias_suspendidos") // Total de días suspendidos acumulados
-  
-  business    Busines  @relation(fields: [businesId], references: [id], onDelete: Cascade)
-  plan        Plan     @relation(fields: [planId], references: [id])
-  payments    PlanPayment[]
-  
-  createdAt   DateTime @default(now()) @map("created_At")
-  updatedAt   DateTime @updatedAt @map("updated_At")
-  
+
+  business Busines       @relation(fields: [businesId], references: [id], onDelete: Cascade)
+  plan     Plan          @relation(fields: [planId], references: [id])
+  payments PlanPayment[]
+
+  createdAt DateTime @default(now()) @map("created_At")
+  updatedAt DateTime @updatedAt @map("updated_At")
+
   @@unique([businesId, planId, fechaInicio])
   @@index([businesId])
   @@index([estado])
@@ -372,19 +372,19 @@ model BusinessPlan {
 }
 
 model PlanPayment {
-  id            Int      @id @default(autoincrement())
-  businessPlanId Int     @map("business_plan_id")
-  monto         Decimal  @db.Decimal(10, 2)
-  fechaPago     DateTime @db.Date @map("fecha_pago")
-  metodoPago    String?  @map("metodo_pago")
-  comprobante   String?
-  estado        String   @default("PENDIENTE") // 'PENDIENTE', 'APROBADO', 'RECHAZADO'
-  
-  businessPlan  BusinessPlan @relation(fields: [businessPlanId], references: [id], onDelete: Cascade)
-  
-  createdAt     DateTime @default(now()) @map("created_At")
-  updatedAt     DateTime @updatedAt @map("updated_At")
-  
+  id             Int      @id @default(autoincrement())
+  businessPlanId Int      @map("business_plan_id")
+  monto          Decimal  @db.Decimal(10, 2)
+  fechaPago      DateTime @map("fecha_pago") @db.Date
+  metodoPago     String?  @map("metodo_pago")
+  comprobante    String?
+  estado         String   @default("PENDIENTE") // 'PENDIENTE', 'APROBADO', 'RECHAZADO'
+
+  businessPlan BusinessPlan @relation(fields: [businessPlanId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now()) @map("created_At")
+  updatedAt DateTime @updatedAt @map("updated_At")
+
   @@index([businessPlanId])
   @@index([estado])
   @@map("plan_payments")

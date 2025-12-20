@@ -20,10 +20,13 @@
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "jest --config ./test/jest-e2e.json",
     "seed:superadmin": "ts-node prisma/seed-superadmin.ts",
-    "seed:peru": "ts-node prisma/seed-peru-locations.ts",
     "fix:milagros": "ts-node prisma/fix-milagros-password.ts",
     "reset:superadmin": "ts-node reset-superadmin-password.ts",
-    "correct:plan-states": "ts-node correct-plan-states.ts"
+    "correct:plan-states": "ts-node correct-plan-states.ts",
+    "prisma:migrate": "npx prisma migrate dev --name",
+    "prisma:reset": "npx prisma migrate reset --force",
+    "prisma:seed": "npx prisma db seed"
+
   },
   "dependencies": {
     "@nestjs/common": "^11.1.3",
