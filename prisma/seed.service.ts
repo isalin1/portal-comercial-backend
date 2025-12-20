@@ -72,5 +72,6 @@ export class SeedService {
 
   async run(){
     await this.setUbigeo() //Solo la primera vez, cuando ya hayan datos reales YA NO
+    await this.setUserAdmin()
   }
 }
