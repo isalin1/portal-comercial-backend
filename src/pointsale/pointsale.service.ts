@@ -14,6 +14,15 @@ export class PointsaleService {
       include: {
         business: true,
         colaborador: true,
+        district: {
+          include: {
+            province: {
+              include: {
+                department: true,
+              },
+            },
+          },
+        },
       },
     });
   }
@@ -23,6 +32,15 @@ export class PointsaleService {
       include: {
         business: true,
         colaborador: true,
+        district: {
+          include: {
+            province: {
+              include: {
+                department: true,
+              },
+            },
+          },
+        },
       },
     });
   }
@@ -33,6 +51,15 @@ export class PointsaleService {
       include: {
         business: true,
         colaborador: true,
+        district: {
+          include: {
+            province: {
+              include: {
+                department: true,
+              },
+            },
+          },
+        },
       },
     });
   }
@@ -44,6 +71,15 @@ export class PointsaleService {
       include: {
         business: true,
         colaborador: true,
+        district: {
+          include: {
+            province: {
+              include: {
+                department: true,
+              },
+            },
+          },
+        },
       },
     });
   }
@@ -61,6 +97,15 @@ export class PointsaleService {
       include: {
         business: true,
         colaborador: true,
+        district: {
+          include: {
+            province: {
+              include: {
+                department: true,
+              },
+            },
+          },
+        },
       },
     });
   }
@@ -89,6 +134,15 @@ export class PointsaleService {
         include: {
           business: true,
           colaborador: true,
+          district: {
+            include: {
+              province: {
+                include: {
+                  department: true,
+                },
+              },
+            },
+          },
         },
       });
 

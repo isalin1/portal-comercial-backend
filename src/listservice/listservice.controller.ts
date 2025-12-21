@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Body, Patch, Param, Delete, Query, UseGuards, BadRequestException, HttpException, HttpStatus } from '@nestjs/common';
 import { ListServiceService } from './listservice.service';
 import { CreateListServiceDto } from './dto/create-listservice.dto';
 import { UpdateListServiceDto } from './dto/update-listservice.dto';
@@ -29,33 +29,67 @@ export class ListserviceController {
   @Post()
   @Roles('ADMIN', 'SUPERADMIN')
   async create(@GetUser() user: User, @Body() createListServiceDto: CreateListServiceDto) {
-    console.log('🔍 POST /listservice - Usuario:', user.email, '| Rol:', user.role);
-    console.log('📦 DTO recibido:', createListServiceDto);
-    
-    // Validar que el usuario tiene acceso al negocio de la categoría de servicio
-    if (user.role === 'ADMIN') {
-      // Obtener el negocio del usuario ADMIN
-      const business = await this.prisma.busines.findFirst({
-        where: { userId: user.id }
-      });
+    try {
+      console.log('🔍 POST /listservice - Usuario:', user.email, '| Rol:', user.role);
+      console.log('📦 DTO recibido:', createListServiceDto);
       
-      if (!business) {
-        throw new Error('ADMIN sin negocio asignado');
+      // Validar que el usuario tiene acceso al negocio de la categoría de servicio
+      if (user.role === 'ADMIN') {
+        // Obtener el negocio del usuario ADMIN
+        const business = await this.prisma.busines.findFirst({
+          where: { userId: user.id }
+        });
+        
+        if (!business) {
+          throw new Error('ADMIN sin negocio asignado');
+        }
+        
+        // Verificar que la categoría de servicio pertenece al negocio del ADMIN
+        const serviceCategory = await this.prisma.serviceCategory.findUnique({
+          where: { id: createListServiceDto.servicecategoryId }
+        });
+        
+        if (!serviceCategory) {
+          throw new Error(`La categoría de servicio con ID ${createListServiceDto.servicecategoryId} no existe`);
+        }
+        
+        if (serviceCategory.businesId !== business.id) {
+          throw new Error('No tienes permiso para crear servicios en esta categoría');
+        }
+        
+        console.log('✅ ADMIN - Validación pasada para negocio:', business.name);
       }
       
-      // Verificar que la categoría de servicio pertenece al negocio del ADMIN
-      const serviceCategory = await this.prisma.serviceCategory.findUnique({
-        where: { id: createListServiceDto.servicecategoryId }
-      });
+      return await this.listserviceService.create(createListServiceDto);
+    } catch (error: any) {
+      console.error('❌ Error en POST /listservice:', error);
+      console.error('❌ Error stack:', error.stack);
+      console.error('❌ Error code:', error.code);
+      console.error('❌ Error message:', error.message);
       
-      if (!serviceCategory || serviceCategory.businesId !== business.id) {
-        throw new Error('No tienes permiso para crear servicios en esta categoría');
+      // Si es un error de validación de class-validator, devolver mensaje específico
+      if (error.response && Array.isArray(error.response.message)) {
+        const validationErrors = error.response.message.join(', ');
+        throw new BadRequestException(`Error de validación: ${validationErrors}`);
       }
       
-      console.log('✅ ADMIN - Validación pasada para negocio:', business.name);
+      // Si es un error de Prisma, devolver mensaje específico
+      if (error.code === 'P2002') {
+        throw new BadRequestException('Ya existe un servicio con estos datos');
+      }
+      
+      if (error.code === 'P2003') {
+        throw new BadRequestException('La categoría de servicio especificada no existe');
+      }
+      
+      // Si ya es una excepción HTTP, re-lanzarla
+      if (error instanceof HttpException) {
+        throw error;
+      }
+      
+      // Error genérico con mensaje
+      throw new BadRequestException(error.message || 'Error al crear el servicio');
     }
-    
-    return this.listserviceService.create(createListServiceDto);
   }
 
   @Get()

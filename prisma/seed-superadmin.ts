@@ -46,19 +46,20 @@ async function main() {
     console.log('✅ Base de datos limpiada exitosamente');
 
     // 2. Crear usuario SUPERADMIN
-    console.log('🔄 Creando usuario SUPERADMIN...');
+    console.log('🔄 Verificando usuario SUPERADMIN...');
     
     const hashedPassword = await bcrypt.hash('123456', 10);
     const existingUser = await prisma.user.findFirst({
-      where: { email : 'ignacio@mia.com'}
-    })
+      where: { email: 'ignacio@admin.com' }
+    });
 
-    if(existingUser){
+    if (!existingUser) {
+      console.log('📝 Creando usuario SUPERADMIN...');
       const superadmin = await prisma.user.create({
         data: {
           firstname: 'Ignacio',
           lastname: 'Salinas',
-          email: 'ignacio@mia.com',
+          email: 'ignacio@admin.com',
           password: hashedPassword,
           phone: '999888777',
           dni: '12345678',
@@ -68,7 +69,6 @@ async function main() {
         },
       });
 
-
       console.log('✅ Usuario SUPERADMIN creado exitosamente:');
       console.log({
         id: superadmin.id,
@@ -77,12 +77,23 @@ async function main() {
         role: superadmin.role,
         isActive: superadmin.isActive,
       });
-  
-      console.log('\n📋 Credenciales de acceso:');
-      console.log('Email: ignacio@mia.com');
-      console.log('Contraseña: 123456');
-      console.log('\n✅ Base de datos lista para usar');
+    } else {
+      console.log('ℹ️ Usuario SUPERADMIN ya existe, actualizando contraseña...');
+      await prisma.user.update({
+        where: { id: existingUser.id },
+        data: {
+          password: hashedPassword,
+          isActive: true,
+          isEmailVerified: true,
+        },
+      });
+      console.log('✅ Contraseña del SUPERADMIN actualizada');
     }
+  
+    console.log('\n📋 Credenciales de acceso:');
+    console.log('Email: ignacio@admin.com');
+    console.log('Contraseña: 123456');
+    console.log('\n✅ Base de datos lista para usar');
 
    
 

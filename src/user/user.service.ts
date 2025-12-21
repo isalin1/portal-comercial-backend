@@ -344,6 +344,9 @@ export class UserService {
 
     console.log('📋 businesId final para asignar:', businesId);
 
+    // Extraer campos de ubicación del DTO
+    const { department, province, district, address, ...userData } = data;
+
     // Crear cliente con rol CLIENT y asignar el negocio
     const client = await this.prisma.user.create({
       data: {
@@ -353,11 +356,31 @@ export class UserService {
         isActive: true,
         isEmailVerified: true,
         clientBusinesId: businesId,
-        ...data,
+        ...userData,
       },
     });
     
     console.log('✅ Cliente creado:', { id: client.id, email: client.email, clientBusinesId: businesId });
+
+    // Si es un cliente y tiene datos de ubicación, crear ClientLocation
+    if (department || province || district || address) {
+      try {
+        await this.prisma.clientLocation.create({
+          data: {
+            userId: client.id,
+            department: department || null,
+            province: province || null,
+            district: district || null,
+            address: address || null,
+          },
+        });
+        console.log('✅ ClientLocation creada exitosamente para usuario:', client.id);
+      } catch (error) {
+        console.error('❌ Error al crear ClientLocation:', error);
+        // No lanzar error para no romper la creación del usuario
+      }
+    }
+
     return client;
   }
 

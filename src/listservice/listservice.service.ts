@@ -8,20 +8,53 @@ export class ListServiceService {
   constructor(private prisma: PrismaService) {}
 
   async create(createListServiceDto: CreateListServiceDto) {
-    return this.prisma.listService.create({
-      data: {
-        ...createListServiceDto,
-        basePrice: createListServiceDto.basePrice || 0,
-      },
-      include: {
-        servicecategory: true,
-        pointsaleServices: {
-          include: {
-            pointsale: true,
+    try {
+      console.log('🔄 Creando servicio con datos:', createListServiceDto);
+      
+      // Validar que la categoría existe
+      const category = await this.prisma.serviceCategory.findUnique({
+        where: { id: createListServiceDto.servicecategoryId }
+      });
+      
+      if (!category) {
+        throw new Error(`La categoría de servicio con ID ${createListServiceDto.servicecategoryId} no existe`);
+      }
+      
+      console.log('✅ Categoría encontrada:', category);
+      
+      // Convertir basePrice a Decimal si es necesario
+      const basePriceValue = typeof createListServiceDto.basePrice === 'string' 
+        ? parseFloat(createListServiceDto.basePrice) 
+        : createListServiceDto.basePrice || 0;
+      
+      console.log('💰 Precio procesado:', basePriceValue, 'Tipo:', typeof basePriceValue);
+      
+      const service = await this.prisma.listService.create({
+        data: {
+          type: createListServiceDto.type,
+          basePrice: basePriceValue,
+          isActive: createListServiceDto.isActive ?? true,
+          servicecategoryId: createListServiceDto.servicecategoryId,
+        },
+        include: {
+          servicecategory: true,
+          pointsaleServices: {
+            include: {
+              pointsale: true,
+            },
           },
         },
-      },
-    });
+      });
+      
+      console.log('✅ Servicio creado exitosamente:', service.id);
+      return service;
+    } catch (error: any) {
+      console.error('❌ Error al crear servicio:', error);
+      console.error('❌ Error code:', error.code);
+      console.error('❌ Error message:', error.message);
+      console.error('❌ Error meta:', error.meta);
+      throw error;
+    }
   }
 
   async findAll(businesId: number | null) {

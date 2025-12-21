@@ -19,4 +19,8 @@ export class CreatePointSaleDto {
   @IsInt()
   @IsOptional()
   userId?: number; // Opcional, ya que en el modelo es Int?
+
+  @IsInt()
+  @IsOptional()
+  districtId?: number; // Opcional, ubicación del punto de venta
 }
