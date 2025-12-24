@@ -67,10 +67,39 @@ export class ListServiceService {
     return this.prisma.listService.findMany({
       where: whereClause,
       include: {
-        servicecategory: true,
+        servicecategory: {
+          include: {
+            busines: {
+              select: {
+                id: true,
+                name: true,
+                comercialname: true,
+                pointsales: {
+                  include: {
+                    pointsaleServices: {
+                      include: {
+                        listservice: true,
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
         pointsaleServices: {
           include: {
-            pointsale: true,
+            pointsale: {
+              include: {
+                business: {
+                  select: {
+                    id: true,
+                    name: true,
+                    comercialname: true,
+                  },
+                },
+              },
+            },
           },
         },
       },

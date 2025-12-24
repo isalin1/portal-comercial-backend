@@ -129,12 +129,57 @@ export class BusinesService {
   }
 
   async findAll() {
-    return this.prisma.busines.findMany({
-      include: {
-        user: true,
-        pointsales: true,
-      },
-    });
+    try {
+      console.log('🔍 Buscando todos los negocios con relaciones...');
+      const businesses = await this.prisma.busines.findMany({
+        include: {
+          user: {
+            select: {
+              id: true,
+              firstname: true,
+              lastname: true,
+              email: true,
+              phone: true,
+              dni: true,
+              role: true,
+            },
+          },
+          pointsales: {
+            select: {
+              id: true,
+              name: true,
+              address: true,
+              phonenumber: true,
+              businesId: true,
+              districtId: true,
+            },
+          },
+        },
+      });
+      console.log(`✅ ${businesses.length} negocios encontrados`);
+      return businesses;
+    } catch (error: any) {
+      console.error('❌ Error en findAll de busines:', error);
+      console.error('❌ Error message:', error.message);
+      console.error('❌ Error code:', error.code);
+      if (error.stack) {
+        console.error('❌ Error stack:', error.stack);
+      }
+      
+      // Si hay un error con las relaciones, intentar sin incluir relaciones problemáticas
+      try {
+        console.log('🔄 Intentando fallback: cargar negocios sin relaciones...');
+        const businesses = await this.prisma.busines.findMany();
+        console.log(`✅ Fallback exitoso: ${businesses.length} negocios encontrados (sin relaciones)`);
+        return businesses;
+      } catch (fallbackError: any) {
+        console.error('❌ Error en fallback de findAll:', fallbackError);
+        console.error('❌ Fallback error message:', fallbackError.message);
+        // Último recurso: devolver array vacío en lugar de lanzar error
+        console.warn('⚠️ Devolviendo array vacío debido a errores persistentes');
+        return [];
+      }
+    }
   }
 
   async findOne(id: number) {

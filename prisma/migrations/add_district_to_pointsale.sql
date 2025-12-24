@@ -8,3 +8,4 @@ FOREIGN KEY ("districtId")
 REFERENCES "districts"("id") 
 ON DELETE SET NULL ON UPDATE CASCADE;
 
+

@@ -19,18 +19,60 @@ async function bootstrap() {
   console.log('JWT_SEED:', process.env.JWT_SEED); // <-- Log de depuración
   const app = await NestFactory.create(AppModule);
 
-  app.enableCors({
-    origin: [
-      'http://localhost:5173',
-      'https://namiatech.com',
-      'https://www.namiatech.com',
-      /^https:\/\/.*\.namiatech\.com$/, // Permitir subdominios
-    ],
+  // Configuración de CORS más permisiva para desarrollo
+  const corsOptions = {
+    origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
+      // Permitir requests sin origin (como Postman, mobile apps, etc.)
+      if (!origin) {
+        return callback(null, true);
+      }
+      
+      const allowedOrigins = [
+        'http://localhost:5173',
+        'http://localhost:3000',
+        'http://127.0.0.1:5173',
+        'https://namiatech.com',
+        'https://www.namiatech.com',
+      ];
+      
+      // Verificar si el origin está en la lista permitida
+      if (allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+      
+      // Verificar si coincide con el patrón de subdominios
+      if (/^https:\/\/.*\.namiatech\.com$/.test(origin)) {
+        return callback(null, true);
+      }
+      
+      // En desarrollo, permitir todos los origins de localhost
+      if (process.env.NODE_ENV !== 'production' && /^http:\/\/localhost:\d+$/.test(origin)) {
+        return callback(null, true);
+      }
+      
+      // Si no coincide, rechazar
+      callback(new Error('Not allowed by CORS'));
+    },
     credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD'],
+    allowedHeaders: [
+      'Content-Type',
+      'Authorization',
+      'Accept',
+      'Origin',
+      'X-Requested-With',
+      'Access-Control-Allow-Origin',
+      'Access-Control-Allow-Headers',
+      'Access-Control-Allow-Methods',
+    ],
     exposedHeaders: ['Authorization'],
-  });
+    preflightContinue: false,
+    optionsSuccessStatus: 204,
+  };
+  
+  app.enableCors(corsOptions);
+  
+  console.log('✅ CORS habilitado para:', corsOptions.origin);
   
   app.setGlobalPrefix('api');
 

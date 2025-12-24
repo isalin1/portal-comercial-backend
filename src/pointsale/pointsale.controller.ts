@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete } from '@nestjs/common';
+import { Controller, Get, Post, Body, Patch, Param, Delete, BadRequestException, ConflictException } from '@nestjs/common';
 import { PointsaleService } from './pointsale.service';
 import { CreatePointSaleDto } from './dto/create-pointsale.dto';
 import { UpdatePointSaleDto } from './dto/update-pointsale.dto';
@@ -41,10 +41,34 @@ export class PointsaleController {
   }
 
   @Post(':id/create-collaborator')
-  createAndAssignCollaborator(
+  async createAndAssignCollaborator(
     @Param('id') id: string,
     @Body() collaboratorData: any
   ) {
-    return this.pointsaleService.createAndAssignCollaborator(+id, collaboratorData);
+    try {
+      console.log('🔍 POST /pointsale/:id/create-collaborator - ID:', id);
+      console.log('📦 Datos recibidos:', { ...collaboratorData, password: '***' });
+      
+      const result = await this.pointsaleService.createAndAssignCollaborator(+id, collaboratorData);
+      console.log('✅ Colaborador creado exitosamente');
+      return result;
+    } catch (error: any) {
+      console.error('❌ Error en createAndAssignCollaborator:', error);
+      console.error('❌ Error message:', error.message);
+      
+      // Si es un error conocido, devolver un mensaje más claro
+      if (error.message?.includes('ya está registrado')) {
+        throw new ConflictException(error.message);
+      }
+      if (error.message?.includes('no encontrado')) {
+        throw new BadRequestException(error.message);
+      }
+      if (error.message?.includes('contraseña')) {
+        throw new BadRequestException(error.message);
+      }
+      
+      // Para otros errores, lanzar un mensaje genérico
+      throw new BadRequestException(`Error al crear el colaborador: ${error.message || 'Error desconocido'}`);
+    }
   }
 }
