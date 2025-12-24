@@ -19,4 +19,4 @@ EXPOSE 3002
 
 
 #MODIFICAS BD (SCHEMA) Y SEED (AGREGAR/QUITAR DATOS DE MAESTROS) -> "npx prisma migrate deploy && npm run prisma:reset && node dist/src/main.js"
-CMD ["sh", "-c", "npm run prisma:reset && npx prisma migrate deploy && npx migrate generate && npm run prisma:seed && node dist/src/main.js"]
+CMD ["sh", "-c", "npx prisma migrate deploy && npm run prisma:seed && node dist/src/main.js"]
