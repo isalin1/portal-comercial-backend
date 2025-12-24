@@ -1,3 +1,5 @@
+/* eslint-disable */
+
 import { Controller, Get, Post, Body, Patch, Param, Delete, Query, UseGuards, BadRequestException, HttpException, HttpStatus } from '@nestjs/common';
 import { ListServiceService } from './listservice.service';
 import { CreateListServiceDto } from './dto/create-listservice.dto';

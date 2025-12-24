@@ -38,7 +38,7 @@ model Province {
 
 model District {
   id        Int      @id @default(autoincrement())
-  name      String   @unique
+  name      String
   createdAt DateTime @default(now()) @map("created_At")
   updatedAt DateTime @updatedAt @map("updated_At")
 
