@@ -3,7 +3,7 @@ version: '3.8'
 services:
   api:
     build: .
-    container_name: api_lavanderia
+    container_name: api_portal_comercial
     restart: always
     environment:
       DATABASE_URL: postgres://user:${DB_PASSWORD}@db:5432/${DB_NAME}
@@ -15,16 +15,16 @@ services:
 
   db:
     image: postgres:15
-    container_name: lavanderiadb
+    container_name: portal_comercial_db
     restart: always
     environment:
       POSTGRES_USER: user
       POSTGRES_PASSWORD: ${DB_PASSWORD}
       POSTGRES_DB: ${DB_NAME}
     volumes:
-      - lavanderia-data:/var/lib/postgresql/data
+      - portal-comercial-data:/var/lib/postgresql/data
     ports:
       - "5434:5432"
 
 volumes:
-  lavanderia-data:
+  portal-comercial-data:
