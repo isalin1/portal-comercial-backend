@@ -1,0 +1,1 @@
+ALTER TABLE "users" ADD COLUMN "agenda_activa" BOOLEAN NOT NULL DEFAULT false;

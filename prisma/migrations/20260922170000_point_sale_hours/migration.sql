@@ -1,0 +1,3 @@
+ALTER TABLE "point_sales" ADD COLUMN "abre" VARCHAR(5),
+ADD COLUMN "cierra" VARCHAR(5),
+ADD COLUMN "dias" TEXT;

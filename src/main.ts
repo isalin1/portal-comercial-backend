@@ -76,9 +76,13 @@ async function bootstrap() {
   
   app.setGlobalPrefix('api');
 
-  // app.useGlobalPipes(
-  //   new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }),
-  // );
+  app.useGlobalPipes(
+    new ValidationPipe({
+      whitelist: true,
+      transform: true,
+      transformOptions: { enableImplicitConversion: true },
+    }),
+  );
 
   // const reflector = app.get(Reflector); // 👈 obtenemos instancia
   // app.useGlobalGuards(new RolesGuard(reflector)); // 👈 pasamos al guard

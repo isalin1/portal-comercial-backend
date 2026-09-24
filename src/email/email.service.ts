@@ -22,10 +22,10 @@ export class EmailService {
     const mailOptions = {
       from: this.configService.get<string>('EMAIL_USER'),
       to: email,
-      subject: 'Verifica tu cuenta - Lavandería',
+      subject: 'Verifica tu cuenta - Red de Negocios Valdiviezo',
       html: `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-          <h2 style="color: #ff7a2f;">¡Bienvenido a Lavandería!</h2>
+          <h2 style="color: #ff7a2f;">¡Bienvenido a Red de Negocios Valdiviezo!</h2>
           <p>Gracias por registrarte. Para activar tu cuenta, haz clic en el siguiente enlace:</p>
           <div style="text-align: center; margin: 30px 0;">
             <a href="${verificationUrl}" 
@@ -59,7 +59,7 @@ export class EmailService {
     const mailOptions = {
       from: this.configService.get<string>('EMAIL_USER'),
       to: email,
-      subject: 'Restablecer Contraseña - Lavandería',
+      subject: 'Restablecer contraseña - Red de Negocios Valdiviezo',
       html: `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
           <h2 style="color: #ff7a2f;">Restablecer Contraseña</h2>

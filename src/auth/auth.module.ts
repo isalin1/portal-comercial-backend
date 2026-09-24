@@ -7,7 +7,6 @@ import { UserModule } from 'src/user/user.module';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { PrismaModule } from '../prisma/prisma.module';
 import { CombinedAuthGuard } from './guards/auth.guard';
-import { EmailModule } from '../email/email.module';
 
 @Module({
   imports: [
@@ -18,10 +17,9 @@ import { EmailModule } from '../email/email.module';
     }),
     UserModule,
     PrismaModule,
-    EmailModule,
   ],
   controllers: [AuthController],
   providers: [AuthService, JwtStrategy, CombinedAuthGuard],
-  exports: [CombinedAuthGuard],
+  exports: [CombinedAuthGuard, PassportModule, JwtModule],
 })
 export class AuthModule {}

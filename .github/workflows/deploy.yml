@@ -20,15 +20,15 @@ jobs:
             # Crear directorio si no existe
             mkdir -p /var/www/html/api.namiatech.com
             
-            if [ ! -d "/var/www/html/api.namiatech.com/lavanderia-backend" ]; then
+            if [ ! -d "/var/www/html/api.namiatech.com/portal-comercial-backend" ]; then
               echo "📦 Clonando repositorio por primera vez..."
               cd /var/www/html/api.namiatech.com
-              git clone https://github.com/TU_USUARIO/TU_REPOSITORIO.git lavanderia-backend
+              git clone https://github.com/TU_USUARIO/TU_REPOSITORIO.git portal-comercial-backend
             fi
 
-            cd /var/www/html/api.namiatech.com/lavanderia-backend
+            cd /var/www/html/api.namiatech.com/portal-comercial-backend
             git pull origin main
-            docker-compose down
-            docker-compose build --no-cache
-            docker-compose up -d
-            docker logs --tail 50 api_lavanderia
+            docker compose down
+            docker compose build --no-cache
+            docker compose up -d
+            docker logs --tail 50 api_portal_comercial

@@ -1,0 +1,1 @@
+ALTER TABLE "appointments" ADD COLUMN "turnos" INTEGER NOT NULL DEFAULT 1;

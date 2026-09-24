@@ -1,48 +1,25 @@
-import { IsString, IsNotEmpty, IsOptional, IsBoolean, IsEmail, IsEnum } from 'class-validator';
-import { Roles } from '@prisma/client';
+import {
+  IsString,
+  IsNotEmpty,
+  IsOptional,
+  IsBoolean,
+  IsEmail,
+  IsEnum,
+} from 'class-validator';
+import { UserType } from '@prisma/client';
 
 export class CreateUserDto {
   @IsString()
   @IsNotEmpty()
-  firstname: string;
+  firstName: string;
 
   @IsString()
   @IsNotEmpty()
-  lastname: string;
+  lastName: string;
 
   @IsString()
   @IsNotEmpty()
   phone: string;
-
-  @IsString()
-  @IsOptional()
-  dni?: string;
-
-  @IsBoolean()
-  @IsOptional()
-  isActive?: boolean;
-
-  @IsBoolean()
-  @IsOptional()
-  isEmailVerified?: boolean;
-
-  @IsString()
-  @IsOptional()
-  emailVerificationToken?: string;
-
-  @IsOptional()
-  emailVerificationExpires?: Date;
-
-  @IsString()
-  @IsOptional()
-  passwordResetToken?: string;
-
-  @IsOptional()
-  passwordResetExpires?: Date;
-
-  @IsEnum(Roles)
-  @IsOptional()
-  role?: Roles;
 
   @IsEmail()
   email: string;
@@ -51,19 +28,11 @@ export class CreateUserDto {
   @IsNotEmpty()
   password: string;
 
-  @IsString()
+  @IsEnum(UserType)
   @IsOptional()
-  department?: string;
+  userType?: UserType;
 
-  @IsString()
+  @IsBoolean()
   @IsOptional()
-  province?: string;
-
-  @IsString()
-  @IsOptional()
-  district?: string;
-
-  @IsString()
-  @IsOptional()
-  address?: string;
+  isActive?: boolean;
 }

@@ -75,8 +75,44 @@ export class SeedService {
     });
   }
 
+  async setRubros() {
+    const exists = await prisma.rubro.findFirst();
+    if (exists) return;
+
+    const catalogs = [
+      {
+        name: 'Alimentos y Antojos',
+        categories: [
+          'Pollerías',
+          'Postres y dulces',
+          'Sánguches y hamburguesas',
+        ],
+      },
+      {
+        name: 'Comercios y Servicios',
+        categories: ['Minimarket', 'Servicios locales'],
+      },
+      {
+        name: 'Profesionales y Técnicos Independientes',
+        categories: ['Profesionales', 'Técnicos'],
+      },
+    ];
+
+    for (const rubro of catalogs) {
+      await prisma.rubro.create({
+        data: {
+          name: rubro.name,
+          categories: {
+            create: rubro.categories.map((name) => ({ name })),
+          },
+        },
+      });
+    }
+  }
+
   async run() {
     await this.setUbigeo(); //Solo la primera vez, cuando ya hayan datos reales YA NO
     await this.setUserAdmin();
+    await this.setRubros();
   }
 }

@@ -35,9 +35,13 @@ model DatUser {
 }
 
 model User {
-  id         Int     @id @default(autoincrement())
-  password   String  @map("password_hash")
-  isActive   Boolean @default(true) @map("estado")
+  id       Int     @id @default(autoincrement())
+  password String  @map("password_hash")
+  isActive Boolean @default(true) @map("estado")
+  agendaEnabled Boolean @default(false) @map("agenda_activa")
+
+  vigenciaStart DateTime? @map("fecha_inicio_vigencia") @db.Date
+  vigenciaEnd   DateTime? @map("fecha_fin_vigencia") @db.Date
 
   datUserId Int     @unique @map("dat_user_id")
   datUser   DatUser @relation(fields: [datUserId], references: [id], onDelete: Cascade)
@@ -92,6 +96,7 @@ model District {
 model Rubro {
   id         Int        @id @default(autoincrement())
   name       String     @unique
+  imageUrl   String?    @map("imagen_url")
   categories Category[]
   businesses Business[]
 
@@ -102,11 +107,13 @@ model Rubro {
 }
 
 model Category {
-  id      Int    @id @default(autoincrement())
-  name    String
-  rubroId Int    @map("rubro_id")
+  id       Int     @id @default(autoincrement())
+  name     String
+  imageUrl String? @map("imagen_url")
+  rubroId  Int     @map("rubro_id")
   rubro   Rubro  @relation(fields: [rubroId], references: [id])
   items   Item[]
+  businesses Business[]
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -116,19 +123,24 @@ model Category {
 }
 
 model Business {
-  id             Int    @id @default(autoincrement())
-  legalName      String @map("razon_social")
-  commercialName String @map("nombre_comercial")
+  id             Int     @id @default(autoincrement())
+  legalName      String  @map("razon_social")
+  commercialName String  @map("nombre_comercial")
+  imageUrl       String? @map("imagen_url")
   numDoc         String  @unique @map("num_doc")
   docType        DocType @map("tipo_doc")
 
   rubroId Int   @map("rubro_id")
   rubro   Rubro @relation(fields: [rubroId], references: [id])
 
+  categoryId Int?      @map("categoria_id")
+  category   Category? @relation(fields: [categoryId], references: [id])
+
   userId Int  @map("user_id")
   user   User @relation(fields: [userId], references: [id])
 
   pointSales PointSale[]
+  agenda     Agenda?
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -157,6 +169,9 @@ model PointSale {
   id    Int    @id @default(autoincrement())
   name  String
   phone String @map("tel_pto_vta")
+  opensAt  String? @map("abre") @db.VarChar(5)
+  closesAt String? @map("cierra") @db.VarChar(5)
+  openDays String? @map("dias")
 
   businessId Int      @map("business_id")
   business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
@@ -204,4 +219,127 @@ model ItemDescription {
   updatedAt DateTime @updatedAt @map("updated_at")
 
   @@map("descriptions")
+}
+
+enum AppointmentStatus {
+  PENDIENTE
+  CONFIRMADA
+  ANULADA
+}
+
+enum AgendaNoticeTarget {
+  CLIENTE
+  PROFESIONAL
+}
+
+model Agenda {
+  id                   Int      @id @default(autoincrement())
+  slotMinutes          Int      @default(30) @map("minutos_turno")
+  opensAt              String?  @map("abre") @db.VarChar(5)
+  closesAt             String?  @map("cierra") @db.VarChar(5)
+  openDays             String?  @map("dias")
+  notifyClient         Boolean  @default(true) @map("avisar_cliente")
+  notifyProfessional   Boolean  @default(true) @map("avisar_profesional")
+  requiresPayment      Boolean  @default(false) @map("requiere_pago")
+
+  businessId Int      @unique @map("business_id")
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  services     AgendaService[]
+  appointments Appointment[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("agendas")
+}
+
+model AgendaService {
+  id              Int     @id @default(autoincrement())
+  name            String  @map("nombre")
+  durationMinutes Int     @map("duracion_min")
+  price           Decimal @db.Decimal(10, 2) @map("precio")
+  isActive        Boolean @default(true) @map("estado")
+
+  agendaId Int    @map("agenda_id")
+  agenda   Agenda @relation(fields: [agendaId], references: [id], onDelete: Cascade)
+
+  appointments Appointment[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("agenda_services")
+}
+
+model Appointment {
+  id              Int               @id @default(autoincrement())
+  serviceName     String            @map("servicio")
+  durationMinutes Int               @map("duracion_min")
+  turns           Int               @default(1) @map("turnos")
+  price           Decimal           @db.Decimal(10, 2) @map("precio")
+  clientUserId    Int?              @map("cliente_user_id")
+  clientName      String            @map("cliente_nombre")
+  clientPhone     String            @map("cliente_celular")
+  clientAddress   String            @map("cliente_direccion")
+  clientDni       String            @map("cliente_dni")
+  pointSaleId     Int?              @map("punto_venta_id")
+  professionalPhone String?         @map("profesional_celular")
+  startsAt        DateTime          @map("inicio")
+  endsAt          DateTime          @map("fin")
+  status          AppointmentStatus @default(PENDIENTE) @map("estado")
+
+  agendaId  Int           @map("agenda_id")
+  agenda    Agenda        @relation(fields: [agendaId], references: [id], onDelete: Cascade)
+  serviceId Int           @map("servicio_id")
+  service   AgendaService @relation(fields: [serviceId], references: [id])
+
+  payments AppointmentPayment[]
+  notices  AppointmentNotice[]
+  turnItems AppointmentTurn[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([agendaId, startsAt])
+  @@map("appointments")
+}
+
+model AppointmentTurn {
+  id       Int      @id @default(autoincrement())
+  startsAt DateTime @map("inicio")
+  endsAt   DateTime @map("fin")
+
+  appointmentId Int         @map("cita_id")
+  appointment   Appointment @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+
+  @@index([appointmentId, startsAt])
+  @@map("appointment_turns")
+}
+
+model AppointmentPayment {
+  id     Int     @id @default(autoincrement())
+  amount Decimal @db.Decimal(10, 2) @map("monto")
+  note   String? @map("nota")
+  paidAt DateTime @default(now()) @map("pagado_en")
+
+  appointmentId Int         @map("cita_id")
+  appointment   Appointment @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+
+  @@map("appointment_payments")
+}
+
+model AppointmentNotice {
+  id          Int                @id @default(autoincrement())
+  target      AgendaNoticeTarget @map("destino")
+  phone       String             @map("celular")
+  message     String             @map("mensaje")
+  whatsappUrl String             @map("whatsapp_url")
+
+  appointmentId Int         @map("cita_id")
+  appointment   Appointment @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("appointment_notices")
 }
