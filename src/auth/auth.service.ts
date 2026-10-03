@@ -11,12 +11,14 @@ import { LoginDto } from './dto/login.dto';
 import * as bcrypt from 'bcrypt';
 import { AuthUser, JwtPayload } from './interfaces/jwt-payload.interface';
 import { UserType } from '@prisma/client';
+import { PrismaService } from 'src/prisma/prisma.service';
 
 @Injectable()
 export class AuthService {
   constructor(
     private readonly userService: UserService,
     private readonly jwtService: JwtService,
+    private readonly prisma: PrismaService,
   ) {}
 
   private toAuthUser(user: {
@@ -24,6 +26,7 @@ export class AuthService {
     datUserId: number;
     password?: string;
     isActive: boolean;
+    termsAcceptedAt?: Date | null;
     datUser: {
       email: string;
       firstName: string;
@@ -32,6 +35,7 @@ export class AuthService {
       userType: UserType;
     };
   }): AuthUser {
+    const userType = user.datUser.userType;
     return {
       id: user.id,
       datUserId: user.datUserId,
@@ -39,27 +43,59 @@ export class AuthService {
       firstName: user.datUser.firstName,
       lastName: user.datUser.lastName,
       phone: user.datUser.phone,
-      userType: user.datUser.userType,
-      role: user.datUser.userType,
+      userType,
+      role: userType,
       isActive: user.isActive,
+      termsAccepted: userType === UserType.ADMIN || Boolean(user.termsAcceptedAt),
     };
+  }
+
+  async acceptTerms(userId: number) {
+    const current = await this.prisma.user.findUnique({
+      where: { id: userId },
+      include: { datUser: true },
+    });
+    if (!current?.datUser) {
+      throw new UnauthorizedException('No se encontró la cuenta');
+    }
+    if (current.datUser.userType !== UserType.ADMIN && !current.termsAcceptedAt) {
+      await this.prisma.user.update({
+        where: { id: userId },
+        data: { termsAcceptedAt: new Date() },
+      });
+    }
+    return { termsAccepted: true };
+  }
+
+  async acceptTermsWithPassword(email: string, password: string) {
+    const user = await this.userService.findByEmailOrNull(email);
+    if (!user) {
+      throw new UnauthorizedException('email no esta registrado');
+    }
+    const isPasswordValid = await bcrypt.compare(password, user.password);
+    if (!isPasswordValid) {
+      throw new UnauthorizedException('contraseña incorrecta');
+    }
+    return this.acceptTerms(user.id);
   }
 
   async register(registerDto: RegisterDto) {
     const userType = registerDto.userType ?? UserType.CLIENTE;
+    const freePlan = userType === UserType.EMPRESARIO && registerDto.plan === 'free';
     const passwordHashed = await hash(registerDto.password, 10);
 
     const user = await this.userService.create({
       ...registerDto,
       password: passwordHashed,
       userType,
-      isActive: userType !== UserType.EMPRESARIO,
+      isActive: userType !== UserType.EMPRESARIO || freePlan,
     });
 
     return {
       user,
-      message:
-        userType === UserType.EMPRESARIO
+      message: freePlan
+        ? 'Registro exitoso. Tu cuenta está activa. Ya puedes iniciar sesión.'
+        : userType === UserType.EMPRESARIO
           ? 'Registro exitoso. Un administrador activará tu cuenta según la vigencia.'
           : 'Usuario registrado exitosamente. Ya puedes iniciar sesión.',
     };

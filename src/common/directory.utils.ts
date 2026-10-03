@@ -40,6 +40,10 @@ export function isVigente(
   return asCalendarDate(vigenciaEnd).getTime() >= calendarDateInLima(now).getTime();
 }
 
+export function isMenuCategory(name: string) {
+  return /comida criolla|men[uú]/i.test(name || '');
+}
+
 export function locksToOneCategory(name: string) {
   return /profesional|alimento|comercio|servicio/i.test(name || '');
 }

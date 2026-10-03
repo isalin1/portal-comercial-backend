@@ -1,9 +1,9 @@
-import { IsIn, IsInt } from 'class-validator';
-
-export const VIGENCIA_DAYS = [30, 90, 180, 360] as const;
+import { Type } from 'class-transformer';
+import { IsInt, Min } from 'class-validator';
 
 export class UpdateVigenciaDto {
+  @Type(() => Number)
   @IsInt()
-  @IsIn(VIGENCIA_DAYS)
-  days: number;
+  @Min(1)
+  planId: number;
 }

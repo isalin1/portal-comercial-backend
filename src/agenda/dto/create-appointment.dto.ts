@@ -1,6 +1,10 @@
-import { ArrayMinSize, IsArray, IsInt, IsNotEmpty, IsOptional, IsString, Matches } from 'class-validator';
+import { Transform } from 'class-transformer';
+import { ArrayMinSize, IsArray, IsBoolean, IsInt, IsNotEmpty, IsOptional, IsString, Matches } from 'class-validator';
 
 export class CreateAppointmentDto {
+  @IsInt()
+  professionalId: number;
+
   @IsInt()
   serviceId: number;
 
@@ -24,10 +28,19 @@ export class CreateAppointmentDto {
   @IsNotEmpty()
   clientAddress: string;
 
-  @Matches(/^\d{8}$/)
+  @Matches(/^\d{8}$/, { message: 'El DNI debe tener 8 dígitos' })
   clientDni: string;
 
   @IsOptional()
   @IsInt()
   pointSaleId?: number;
+
+  @IsOptional()
+  @IsString()
+  notes?: string;
+
+  @Transform(({ value }) => value === true || value === 'true' || value === 1 || value === '1')
+  @IsOptional()
+  @IsBoolean()
+  notifyClient?: boolean;
 }

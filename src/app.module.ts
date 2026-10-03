@@ -18,6 +18,13 @@ import { PointSalesModule } from './point-sales/point-sales.module';
 import { ItemModule } from './item/item.module';
 import { DirectoryModule } from './directory/directory.module';
 import { AgendaModule } from './agenda/agenda.module';
+import { UnitModule } from './unit/unit.module';
+import { PedidosModule } from './pedidos/pedidos.module';
+import { SettingsModule } from './settings/settings.module';
+import { PlanModule } from './plan/plan.module';
+import { MarketModule } from './market/market.module';
+import { ZoneModule } from './zone/zone.module';
+import { PublicationModule } from './publication/publication.module';
 
 @Module({
   imports: [
@@ -39,6 +46,14 @@ import { AgendaModule } from './agenda/agenda.module';
     PointSalesModule,
     ItemModule,
     DirectoryModule,
+    AgendaModule,
+    UnitModule,
+    PedidosModule,
+    SettingsModule,
+    PlanModule,
+    MarketModule,
+    ZoneModule,
+    PublicationModule,
   ],
   controllers: [AppController],
   providers: [AppService],

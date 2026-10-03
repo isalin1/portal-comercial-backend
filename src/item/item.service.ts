@@ -3,23 +3,48 @@ import {
   ForbiddenException,
   Injectable,
   NotFoundException,
+  OnModuleInit,
 } from '@nestjs/common';
-import { UserType } from '@prisma/client';
+import { Cron } from '@nestjs/schedule';
+import { ItemKind, MenuPart, UserType } from '@prisma/client';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { CreateItemDto } from './dto/create-item.dto';
 import { UpdateItemDto } from './dto/update-item.dto';
 import { AuthUser } from 'src/auth/interfaces/jwt-payload.interface';
-import { locksToOneCategory } from 'src/common/directory.utils';
+import { calendarDateInLima, isMenuCategory, locksToOneCategory } from 'src/common/directory.utils';
+import { PublicationService } from 'src/publication/publication.service';
 
 const include = {
-  descriptions: true,
+  descriptions: { include: { unit: true } },
   category: { include: { rubro: true } },
   pointSale: { include: { business: true } },
+  menuLinks: { select: { menuOfferId: true } },
 } as const;
 
 @Injectable()
-export class ItemService {
-  constructor(private readonly prisma: PrismaService) {}
+export class ItemService implements OnModuleInit {
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly publication: PublicationService,
+  ) {}
+
+  onModuleInit() {
+    return this.uncheckMenuForToday();
+  }
+
+  @Cron('0 0 * * *', { timeZone: 'America/Lima' })
+  async uncheckMenuForToday() {
+    const day = calendarDateInLima();
+    const items = await this.prisma.item.findMany({
+      where: { kind: ItemKind.MENU, isActive: true },
+      select: { id: true },
+    });
+    if (!items.length) return;
+    await this.prisma.itemAvailability.createMany({
+      data: items.map((item) => ({ itemId: item.id, day, available: false })),
+      skipDuplicates: true,
+    });
+  }
 
   private async assertPointSale(user: AuthUser, pointSaleId: number) {
     const point = await this.prisma.pointSale.findUnique({
@@ -63,28 +88,91 @@ export class ItemService {
     return category;
   }
 
+  private plate(categoryName: string, dto: Pick<CreateItemDto, 'kind' | 'menuPart' | 'descriptions'>) {
+    const kind: ItemKind = isMenuCategory(categoryName) && dto.kind === 'MENU' ? ItemKind.MENU : ItemKind.CARTA;
+    if (kind === ItemKind.MENU && !dto.menuPart) {
+      throw new BadRequestException('Elige si el plato es entrada, segundo o refresco');
+    }
+    const descriptions = (dto.descriptions || []).map((line) => {
+      if (kind === ItemKind.MENU) {
+        return { id: line.id, description: line.description, price: null as number | null, unitId: null as number | null };
+      }
+      if (line.price === undefined || line.price === null || Number.isNaN(Number(line.price)) || Number(line.price) < 0) {
+        throw new BadRequestException('El precio no puede ser menor que cero');
+      }
+      if (!line.unitId) throw new BadRequestException('Elige la unidad de cada descripción');
+      return { id: line.id, description: line.description, price: Number(line.price), unitId: Number(line.unitId) };
+    });
+    return {
+      kind,
+      menuPart: kind === ItemKind.MENU ? (dto.menuPart as MenuPart) : null,
+      descriptions,
+    };
+  }
+
+  private async resolveMenuOffers(
+    kind: ItemKind,
+    menuPart: MenuPart | null,
+    businessId: number,
+    raw?: number[] | null,
+  ) {
+    if (kind !== ItemKind.MENU) return [];
+    const ids = [...new Set((raw || []).map(Number).filter(Boolean))];
+    if (!ids.length) throw new BadRequestException('Elige el tipo de menú');
+    if (menuPart === MenuPart.SEGUNDO && ids.length !== 1) {
+      throw new BadRequestException('El segundo pertenece a un solo tipo de menú');
+    }
+    const offers = await this.prisma.menuOffer.findMany({
+      where: { id: { in: ids }, businessId, isActive: true },
+    });
+    if (offers.length !== ids.length) throw new BadRequestException('Ese tipo de menú no pertenece al negocio');
+    return ids;
+  }
+
+  private withOffers<T extends { menuOfferId?: number | null; menuLinks?: { menuOfferId: number }[] }>(item: T) {
+    const linked = item.menuLinks?.map((link) => link.menuOfferId) || [];
+    return { ...item, menuOfferIds: linked.length ? linked : item.menuOfferId ? [item.menuOfferId] : [] };
+  }
+
   async create(dto: CreateItemDto, user: AuthUser, imageUrl?: string) {
     const point = await this.assertPointSale(user, Number(dto.pointSaleId));
-    await this.assertCategory(user, Number(dto.categoryId), point.business.id);
+    const category = await this.assertCategory(user, Number(dto.categoryId), point.business.id);
+    const plate = this.plate(category.name, dto);
+    const menuOfferIds = await this.resolveMenuOffers(
+      plate.kind,
+      plate.menuPart,
+      point.business.id,
+      dto.menuOfferIds?.length ? dto.menuOfferIds : dto.menuOfferId ? [dto.menuOfferId] : [],
+    );
 
-    return this.prisma.item.create({
+    const created = await this.prisma.item.create({
       data: {
         name: dto.name,
         pointSaleId: Number(dto.pointSaleId),
         categoryId: Number(dto.categoryId),
         isActive: dto.isActive ?? true,
+        kind: plate.kind,
+        menuPart: plate.menuPart,
+        menuOfferId: menuOfferIds.length === 1 ? menuOfferIds[0] : null,
+        menuLinks: menuOfferIds.length ? { create: menuOfferIds.map((menuOfferId) => ({ menuOfferId })) } : undefined,
         imageUrl,
-        descriptions: dto.descriptions?.length
-          ? {
-              create: dto.descriptions.map((item) => ({
-                description: item.description,
-                price: item.price,
-              })),
-            }
+        descriptions: plate.descriptions.length
+          ? { create: plate.descriptions.map(({ description, price, unitId }) => ({ description, price, unitId })) }
           : undefined,
       },
       include,
     });
+    await this.publication.trackCreate(user, point.business.id, 'ITEM', created.id, [
+      { field: 'name', label: `Nombre del producto · ${created.name}`, value: created.name },
+      { field: 'imageUrl', label: `Foto del producto · ${created.name}`, value: created.imageUrl },
+    ]);
+    for (const line of created.descriptions) {
+      await this.publication.trackCreate(user, point.business.id, 'DESCRIPTION', line.id, [
+        { field: 'description', label: `Descripción · ${created.name}`, value: line.description },
+      ]);
+    }
+    const [decorated] = await this.publication.decorateItems(user, [this.withOffers(created)]);
+    return decorated;
   }
 
   async findAll(user: AuthUser, pointSaleId?: number) {
@@ -97,11 +185,12 @@ export class ItemService {
       where.pointSale = { business: { userId: user.id } };
     }
 
-    return this.prisma.item.findMany({
+    const items = await this.prisma.item.findMany({
       where,
       include,
       orderBy: { name: 'asc' },
     });
+    return this.publication.decorateItems(user, items.map((item) => this.withOffers(item)));
   }
 
   async findOne(id: number, user: AuthUser) {
@@ -111,7 +200,8 @@ export class ItemService {
     });
     if (!item) throw new NotFoundException('Ítem no encontrado');
     await this.assertPointSale(user, item.pointSaleId);
-    return item;
+    const [decorated] = await this.publication.decorateItems(user, [this.withOffers(item)]);
+    return decorated;
   }
 
   async update(
@@ -130,31 +220,180 @@ export class ItemService {
     const pointId = dto.pointSaleId ? Number(dto.pointSaleId) : current.pointSaleId;
     const point = await this.assertPointSale(user, pointId);
     const categoryId = dto.categoryId ? Number(dto.categoryId) : current.categoryId;
-    await this.assertCategory(user, categoryId, point.business.id);
+    const category = await this.assertCategory(user, categoryId, point.business.id);
+    const plate = dto.descriptions || dto.kind || dto.menuPart
+      ? this.plate(category.name, {
+          kind: dto.kind || (current.kind as 'CARTA' | 'MENU'),
+          menuPart: dto.menuPart === undefined ? current.menuPart : dto.menuPart,
+          descriptions: dto.descriptions || [],
+        })
+      : null;
+    const wantsOffers = dto.menuOfferIds !== undefined || dto.menuOfferId !== undefined;
+    const menuOfferIds = plate || wantsOffers
+      ? await this.resolveMenuOffers(
+          plate?.kind || (current.kind as ItemKind),
+          plate ? plate.menuPart : current.menuPart,
+          point.business.id,
+          dto.menuOfferIds !== undefined
+            ? dto.menuOfferIds
+            : dto.menuOfferId
+              ? [dto.menuOfferId]
+              : current.menuOfferId
+                ? [current.menuOfferId]
+                : [],
+        )
+      : undefined;
 
-    if (dto.descriptions) {
-      await this.prisma.itemDescription.deleteMany({ where: { itemId: id } });
-    }
+    const nextName = dto.name?.trim() || current.name;
+    const nextImage = imageUrl !== undefined ? imageUrl : dto.removeImage ? null : undefined;
+    const blocked = await this.publication.reviewFields(user, point.business.id, 'ITEM', id, [
+      ...(dto.name !== undefined ? [{ field: 'name', label: `Nombre del producto · ${nextName}`, before: current.name, after: dto.name }] : []),
+      ...(nextImage !== undefined ? [{ field: 'imageUrl', label: `Foto del producto · ${nextName}`, before: current.imageUrl, after: nextImage }] : []),
+    ]);
+    if (dto.descriptions && plate) await this.syncDescriptions(user, point.business.id, id, nextName, plate.descriptions);
 
-    return this.prisma.item.update({
+    const saved = await this.prisma.item.update({
       where: { id },
       data: {
-        name: dto.name,
+        name: blocked.has('name') ? undefined : dto.name,
         isActive: dto.isActive,
         categoryId: dto.categoryId ? Number(dto.categoryId) : undefined,
         pointSaleId: dto.pointSaleId ? Number(dto.pointSaleId) : undefined,
-        ...(imageUrl ? { imageUrl } : dto.removeImage ? { imageUrl: null } : {}),
-        descriptions: dto.descriptions
+        ...(plate
           ? {
-              create: dto.descriptions.map((item) => ({
-                description: item.description,
-                price: item.price,
-              })),
+              kind: plate.kind,
+              menuPart: plate.menuPart,
             }
-          : undefined,
+          : {}),
+        ...(menuOfferIds
+          ? {
+              menuOfferId: menuOfferIds.length === 1 ? menuOfferIds[0] : null,
+              menuLinks: { deleteMany: {}, create: menuOfferIds.map((menuOfferId) => ({ menuOfferId })) },
+            }
+          : {}),
+        ...(blocked.has('imageUrl') ? {} : imageUrl ? { imageUrl } : dto.removeImage ? { imageUrl: null } : {}),
       },
       include,
     });
+    const [decorated] = await this.publication.decorateItems(user, [this.withOffers(saved)]);
+    return decorated;
+  }
+
+  private async syncDescriptions(
+    user: AuthUser,
+    businessId: number,
+    itemId: number,
+    itemName: string,
+    lines: { id?: number; description: string; price: number | null; unitId: number | null }[],
+  ) {
+    const existing = await this.prisma.itemDescription.findMany({ where: { itemId } });
+    const kept = new Set<number>();
+    for (const line of lines) {
+      const text = line.description.trim();
+      if (!text) continue;
+      const match = line.id ? existing.find((row) => row.id === line.id) : undefined;
+      if (match) {
+        kept.add(match.id);
+        const blocked = await this.publication.reviewFields(user, businessId, 'DESCRIPTION', match.id, [
+          { field: 'description', label: `Descripción · ${itemName}`, before: match.description, after: text },
+        ]);
+        await this.prisma.itemDescription.update({
+          where: { id: match.id },
+          data: {
+            description: blocked.has('description') ? undefined : text,
+            price: line.price,
+            unitId: line.unitId,
+          },
+        });
+        continue;
+      }
+      const created = await this.prisma.itemDescription.create({
+        data: { itemId, description: text, price: line.price, unitId: line.unitId },
+      });
+      kept.add(created.id);
+      await this.publication.trackCreate(user, businessId, 'DESCRIPTION', created.id, [
+        { field: 'description', label: `Descripción · ${itemName}`, value: text },
+      ]);
+    }
+    for (const row of existing) {
+      if (kept.has(row.id)) continue;
+      await this.publication.forget('DESCRIPTION', row.id);
+      await this.prisma.itemDescription.delete({ where: { id: row.id } });
+    }
+  }
+
+  async availability(user: AuthUser, day?: string) {
+    const date = this.parseDay(day);
+    const items = await this.prisma.item.findMany({
+      where: user.userType === UserType.EMPRESARIO
+        ? { pointSale: { business: { userId: user.id } } }
+        : {},
+      include: {
+        category: { include: { rubro: true } },
+        menuOffer: true,
+        menuLinks: { include: { menuOffer: { select: { name: true } } } },
+        availabilities: { where: { day: date } },
+      },
+      orderBy: { name: 'asc' },
+    });
+    return {
+      date: date.toISOString().slice(0, 10),
+      items: items.map((item) => ({
+        id: item.id,
+        name: item.name,
+        kind: item.kind,
+        menuPart: item.menuPart,
+        menuOfferId: item.menuOfferId,
+        menuOfferIds: item.menuLinks.length
+          ? item.menuLinks.map((link) => link.menuOfferId)
+          : item.menuOfferId
+            ? [item.menuOfferId]
+            : [],
+        menuOfferNames: item.menuLinks.length
+          ? item.menuLinks.map((link) => link.menuOffer.name)
+          : item.menuOffer?.name
+            ? [item.menuOffer.name]
+            : [],
+        menuOfferName: item.menuLinks[0]?.menuOffer.name || item.menuOffer?.name || '',
+        categoryName: item.category.name,
+        available: item.availabilities[0]
+          ? item.availabilities[0].available
+          : item.kind !== ItemKind.MENU,
+      })),
+    };
+  }
+
+  async setAvailability(user: AuthUser, day: string | undefined, itemIds: number[]) {
+    const date = this.parseDay(day);
+    const mine = await this.prisma.item.findMany({
+      where: user.userType === UserType.EMPRESARIO
+        ? { pointSale: { business: { userId: user.id } } }
+        : { id: { in: itemIds } },
+      select: { id: true },
+    });
+    const allowed = new Set(mine.map((item) => item.id));
+    if (itemIds.some((id) => !allowed.has(Number(id)))) {
+      throw new ForbiddenException('No puedes publicar platos de otro negocio');
+    }
+    const chosen = new Set(itemIds.map(Number));
+    await this.prisma.$transaction(
+      mine.map((item) =>
+        this.prisma.itemAvailability.upsert({
+          where: { itemId_day: { itemId: item.id, day: date } },
+          create: { itemId: item.id, day: date, available: chosen.has(item.id) },
+          update: { available: chosen.has(item.id) },
+        }),
+      ),
+    );
+    return this.availability(user, date.toISOString().slice(0, 10));
+  }
+
+  private parseDay(day?: string) {
+    if (!day) return calendarDateInLima();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) {
+      throw new BadRequestException('La fecha no es válida');
+    }
+    return new Date(`${day}T00:00:00.000Z`);
   }
 
   async remove(id: number, user: AuthUser) {

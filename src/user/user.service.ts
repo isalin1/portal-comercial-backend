@@ -10,13 +10,16 @@ import { UpdateUserDto } from './dto/update-user.dto';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { UpdateUserStatusDto } from './dto/update-user-status.dto';
 import { UpdateUserRoleDto } from './dto/update-user-role.dto';
-import { isVigente, nextVigenciaEnd } from 'src/common/directory.utils';
+import { addCalendarDays, calendarDateInLima, isVigente, nextVigenciaEnd } from 'src/common/directory.utils';
+import { comparePlans } from 'src/common/plan-features';
 import { AuthUser } from 'src/auth/interfaces/jwt-payload.interface';
 import * as bcrypt from 'bcrypt';
 
 const userInclude = {
   datUser: true,
-  businesses: true,
+  businesses: { include: { rubro: true, category: { select: { id: true, name: true } } } },
+  planCatalog: true,
+  pendingPlan: true,
 } as const;
 
 @Injectable()
@@ -40,7 +43,7 @@ export class UserService {
     } = createUserDto;
 
     const resolvedActive =
-      userType === UserType.EMPRESARIO ? false : (isActive ?? true);
+      userType === UserType.EMPRESARIO ? Boolean(isActive) : (isActive ?? true);
 
     const existing = await this.prisma.datUser.findUnique({
       where: { email },
@@ -65,6 +68,7 @@ export class UserService {
           create: {
             password: passwordHash,
             isActive: resolvedActive,
+            ...(createUserDto.plan === 'free' ? { plan: 'FREE' } : {}),
           },
         },
       },
@@ -77,6 +81,20 @@ export class UserService {
 
     if (!datUser.user) {
       throw new ConflictException('No se pudo crear el usuario');
+    }
+
+    if (createUserDto.plan === 'free') {
+      const libre = await this.prisma.plan.findFirst({ where: { name: 'Libre' } });
+      const setting = await this.prisma.appSetting.findUnique({ where: { id: 1 } });
+      const days = libre?.days || setting?.freePlanDays || 30;
+      const vigenciaStart = calendarDateInLima();
+      const vigenciaEnd = addCalendarDays(vigenciaStart, days);
+      const user = await this.prisma.user.update({
+        where: { id: datUser.user.id },
+        data: { plan: 'FREE', planId: libre?.id, vigenciaStart, vigenciaEnd, vigenciaDays: days, isActive: true },
+        include: userInclude,
+      });
+      return this.omitPassword(user);
     }
 
     return this.omitPassword(datUser.user);
@@ -192,14 +210,43 @@ export class UserService {
   }
 
   async updateStatus(id: number, dto: UpdateUserStatusDto) {
-    await this.findWithPassword(id);
+    const current = await this.findWithPassword(id);
+    if (!dto.isActive) {
+      const user = await this.prisma.user.update({
+        where: { id },
+        data: { isActive: false },
+        include: userInclude,
+      });
+      return this.omitPassword(user);
+    }
+
+    const onFreePlan = current.plan === 'FREE' || current.planCatalog?.name === 'Libre';
+    const expired = !current.vigenciaEnd || !isVigente(current.vigenciaEnd);
+    if (current.datUser.userType === UserType.EMPRESARIO && (onFreePlan || expired)) {
+      const libre = await this.prisma.plan.findFirst({ where: { name: 'Libre' } });
+      const setting = await this.prisma.appSetting.findUnique({ where: { id: 1 } });
+      const days = libre?.days || setting?.freePlanDays || 30;
+      const vigenciaStart = calendarDateInLima();
+      const user = await this.prisma.user.update({
+        where: { id },
+        data: {
+          isActive: true,
+          plan: 'FREE',
+          planId: libre?.id,
+          vigenciaStart,
+          vigenciaEnd: addCalendarDays(vigenciaStart, days),
+          vigenciaDays: days,
+        },
+        include: userInclude,
+      });
+      return this.omitPassword(user);
+    }
 
     const user = await this.prisma.user.update({
       where: { id },
-      data: { isActive: dto.isActive },
+      data: { isActive: true },
       include: userInclude,
     });
-
     return this.omitPassword(user);
   }
 
@@ -231,18 +278,83 @@ export class UserService {
     return users.map((user) => this.omitPassword(user));
   }
 
-  async extendVigencia(id: number, days: number) {
+  private paymentData(userId: number, chosen: { id: number; days: number; price: Prisma.Decimal; name: string; commercialName: string }) {
+    return {
+      userId,
+      planId: chosen.id,
+      days: chosen.days,
+      amount: chosen.price,
+      planName: chosen.name,
+      commercialName: chosen.commercialName,
+      paidOn: calendarDateInLima(),
+    };
+  }
+
+  async extendVigencia(id: number, planId: number) {
     const current = await this.findWithPassword(id);
-    const vigenciaEnd = nextVigenciaEnd(current.vigenciaEnd, days);
-    const user = await this.prisma.user.update({
-      where: { id },
-      data: {
-        vigenciaEnd,
-        isActive: isVigente(vigenciaEnd),
-      },
-      include: userInclude,
+    const chosen = await this.prisma.plan.findUnique({ where: { id: planId } });
+    if (!chosen) throw new NotFoundException('Ese plan no está registrado');
+    if (chosen.name === 'Libre') throw new ConflictException('El plan Free no se registra como pago');
+    const days = chosen.days;
+    const vigente = Boolean(current.vigenciaEnd && isVigente(current.vigenciaEnd));
+    const change = vigente && current.planCatalog ? comparePlans(current.planCatalog, chosen) : 'asignado';
+    const payment = this.paymentData(id, chosen);
+
+    if (change === 'inferior') {
+      const [user] = await this.prisma.$transaction([
+        this.prisma.user.update({
+          where: { id },
+          data: { pendingPlanId: chosen.id },
+          include: userInclude,
+        }),
+        this.prisma.planPayment.create({ data: payment }),
+      ]);
+      return { ...this.omitPassword(user), planChange: 'inferior' as const };
+    }
+
+    const today = calendarDateInLima();
+    const extendCurrent = vigente;
+    const vigenciaStart = extendCurrent ? current.vigenciaStart ?? today : today;
+    const vigenciaEnd = extendCurrent ? nextVigenciaEnd(current.vigenciaEnd, days) : addCalendarDays(today, days);
+    const [user] = await this.prisma.$transaction([
+      this.prisma.user.update({
+        where: { id },
+        data: {
+          vigenciaStart,
+          vigenciaEnd,
+          vigenciaDays: days,
+          plan: null,
+          planId: chosen.id,
+          pendingPlanId: null,
+          isActive: isVigente(vigenciaEnd),
+        },
+        include: userInclude,
+      }),
+      this.prisma.planPayment.create({ data: payment }),
+    ]);
+    return { ...this.omitPassword(user), planChange: change };
+  }
+
+  async findPlanPayments(date?: string) {
+    const paidOn = date && /^\d{4}-\d{2}-\d{2}$/.test(date)
+      ? new Date(`${date}T00:00:00.000Z`)
+      : calendarDateInLima();
+    const rows = await this.prisma.planPayment.findMany({
+      where: { paidOn },
+      include: { user: { include: { datUser: { select: { firstName: true, lastName: true } } } } },
+      orderBy: { createdAt: 'asc' },
     });
-    return this.omitPassword(user);
+    return rows.map((row) => ({
+      id: row.id,
+      userId: row.userId,
+      firstName: row.user.datUser.firstName,
+      lastName: row.user.datUser.lastName,
+      days: row.days,
+      amount: row.amount,
+      planName: row.planName,
+      commercialName: row.commercialName,
+      paidOn: row.paidOn,
+    }));
   }
 
   async findClients() {

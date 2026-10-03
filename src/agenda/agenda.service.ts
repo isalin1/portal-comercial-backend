@@ -13,11 +13,13 @@ import {
 import { PrismaService } from 'src/prisma/prisma.service';
 import { AuthUser } from 'src/auth/interfaces/jwt-payload.interface';
 import { toWhatsAppUrl } from 'src/common/directory.utils';
+import { planFlags } from 'src/common/plan-features';
 import { UpdateAgendaDto } from './dto/update-agenda.dto';
 import { CreateAgendaServiceDto } from './dto/create-agenda-service.dto';
 import { UpdateAgendaServiceDto } from './dto/update-agenda-service.dto';
 import { CreateAppointmentDto } from './dto/create-appointment.dto';
 import { CreateAppointmentPaymentDto } from './dto/create-appointment-payment.dto';
+import { PublicationService } from 'src/publication/publication.service';
 
 const LIMA = 'America/Lima';
 
@@ -31,74 +33,14 @@ type AppointmentRow = Prisma.AppointmentGetPayload<{ include: typeof appointment
 
 @Injectable()
 export class AgendaService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly publication: PublicationService,
+  ) {}
 
   async accessMe(user: AuthUser) {
     if (user.userType === UserType.ADMIN) return { enabled: true };
     return { enabled: await this.isEnabled(user.id) };
-  }
-
-  async listAccess() {
-    const rows = await this.prisma.user.findMany({
-      where: {
-        datUser: { userType: UserType.EMPRESARIO },
-        businesses: { some: { rubro: { name: { contains: 'profesional', mode: 'insensitive' } } } },
-      },
-      include: {
-        datUser: true,
-        businesses: {
-          where: { rubro: { name: { contains: 'profesional', mode: 'insensitive' } } },
-          select: { commercialName: true },
-        },
-      },
-      orderBy: { datUser: { lastName: 'asc' } },
-    });
-    return rows.map((row) => this.mapAccess(row));
-  }
-
-  async setAccess(userId: number, enabled: boolean) {
-    const row = await this.prisma.user.findUnique({
-      where: { id: userId },
-      include: { datUser: true },
-    });
-    if (!row || row.datUser.userType !== UserType.EMPRESARIO) {
-      throw new BadRequestException('El módulo se activa solo para un empresario');
-    }
-    const professional = await this.prisma.business.count({
-      where: { userId, rubro: { name: { contains: 'profesional', mode: 'insensitive' } } },
-    });
-    if (!professional) {
-      throw new BadRequestException('La agenda solo aplica al rubro de profesionales independientes');
-    }
-    const updated = await this.prisma.user.update({
-      where: { id: userId },
-      data: { agendaEnabled: enabled },
-      include: {
-        datUser: true,
-        businesses: {
-          where: { rubro: { name: { contains: 'profesional', mode: 'insensitive' } } },
-          select: { commercialName: true },
-        },
-      },
-    });
-    return this.mapAccess(updated);
-  }
-
-  private mapAccess(row: {
-    id: number;
-    agendaEnabled: boolean;
-    datUser: { firstName: string; lastName: string; email: string; phone: string };
-    businesses: { commercialName: string }[];
-  }) {
-    return {
-      id: row.id,
-      firstName: row.datUser.firstName,
-      lastName: row.datUser.lastName,
-      email: row.datUser.email,
-      phone: row.datUser.phone,
-      businessName: row.businesses.map((business) => business.commercialName).join(', ') || 'Sin negocio',
-      enabled: row.agendaEnabled,
-    };
   }
 
   async businesses(user: AuthUser) {
@@ -106,31 +48,112 @@ export class AgendaService {
     return this.prisma.business.findMany({
       where: {
         ...(user.userType === UserType.ADMIN ? {} : { userId: user.id }),
-        rubro: { name: { contains: 'Profesional', mode: 'insensitive' } },
+        rubro: { allowsAgenda: true },
       },
       select: { id: true, commercialName: true },
       orderBy: { commercialName: 'asc' },
     });
   }
 
-  async get(businessId: number, user: AuthUser) {
+  async get(businessId: number, user: AuthUser, professionalId?: number) {
     const business = await this.assertProfessional(businessId, user);
-    const agenda = await this.prisma.agenda.findUnique({
+    const professionals = await this.prisma.professional.findMany({
       where: { businessId },
-      include: { services: { orderBy: { name: 'asc' } } },
+      orderBy: { name: 'asc' },
     });
+    const chosen = professionalId || (professionals.length === 1 ? professionals[0].id : 0);
+    const agenda = chosen
+      ? await this.prisma.agenda.findFirst({
+          where: { businessId, professionalId: chosen },
+          include: { services: { orderBy: { name: 'asc' } }, days: { include: { turns: { orderBy: { startsAt: 'asc' } } } } },
+        })
+      : null;
+    const mapped = agenda ? this.mapAgenda(agenda) : null;
     return {
       business: {
         id: business.id,
         commercialName: business.commercialName,
+        rubroName: business.rubro.name,
         pointSales: business.pointSales.map((point) => ({
           id: point.id,
           name: point.name,
           phone: point.phone,
         })),
       },
-      agenda: agenda ? this.mapAgenda(agenda) : null,
+      maxProfessionals: await this.professionalLimit(businessId),
+      professionals: professionals.map((item) => ({ id: item.id, name: item.name, phone: item.phone, isActive: item.isActive })),
+      agenda: mapped
+        ? { ...mapped, services: await this.publication.decorateServices(user, mapped.services) }
+        : null,
     };
+  }
+
+  async listProfessionals(businessId: number, user: AuthUser) {
+    await this.assertOwner(businessId, user);
+    const max = await this.professionalLimit(businessId);
+    await this.fillAgendaSlot(businessId, max);
+    const professionals = await this.prisma.professional.findMany({ where: { businessId }, orderBy: { name: 'asc' } });
+    return {
+      max,
+      professionals: professionals.map((item) => ({
+        id: item.id,
+        name: item.name,
+        phone: item.phone,
+        isActive: item.isActive,
+        agendaControl: item.agendaControl,
+      })),
+    };
+  }
+
+  async createProfessional(businessId: number, user: AuthUser, body: { name: string; phone?: string }) {
+    await this.assertOwner(businessId, user);
+    const name = String(body.name || '').trim();
+    if (!name) throw new BadRequestException('Indica el nombre del profesional');
+    const phone = String(body.phone || '').trim();
+    if (!phone) throw new BadRequestException('Indica el celular del profesional');
+    const max = await this.professionalLimit(businessId);
+    const used = await this.prisma.professional.count({ where: { businessId, agendaControl: true } });
+    return this.prisma.professional.create({
+      data: {
+        businessId,
+        name,
+        phone,
+        agendaControl: max > 0 && used < max,
+        agenda: { create: { businessId, slotMinutes: 30 } },
+      },
+    });
+  }
+
+  async updateProfessional(id: number, user: AuthUser, body: { name?: string; phone?: string; isActive?: boolean; agendaControl?: boolean }) {
+    const current = await this.prisma.professional.findUnique({ where: { id } });
+    if (!current) throw new NotFoundException('Profesional no encontrado');
+    await this.assertOwner(current.businessId, user);
+    const name = body.name === undefined ? undefined : String(body.name).trim();
+    if (name === '') throw new BadRequestException('Indica el nombre del profesional');
+    if (body.agendaControl === true && !current.agendaControl) {
+      await this.claimAgendaSlot(current.businessId, id);
+    }
+    return this.prisma.professional.update({
+      where: { id },
+      data: {
+        name,
+        phone: body.phone === undefined ? undefined : String(body.phone).trim() || null,
+        isActive: body.isActive,
+        agendaControl: body.agendaControl,
+      },
+    });
+  }
+
+  async removeProfessional(id: number, user: AuthUser) {
+    const current = await this.prisma.professional.findUnique({ where: { id }, include: { agenda: true } });
+    if (!current) throw new NotFoundException('Profesional no encontrado');
+    await this.assertOwner(current.businessId, user);
+    if (current.agenda) {
+      const citas = await this.prisma.appointment.count({ where: { agendaId: current.agenda.id, status: { not: AppointmentStatus.ANULADA } } });
+      if (citas) throw new BadRequestException('Este profesional tiene citas vigentes');
+    }
+    await this.prisma.professional.delete({ where: { id } });
+    return { ok: true };
   }
 
   async save(businessId: number, dto: UpdateAgendaDto, user: AuthUser) {
@@ -149,21 +172,18 @@ export class AgendaService {
       notifyProfessional: dto.notifyProfessional,
       requiresPayment: dto.requiresPayment,
     };
-    const agenda = await this.prisma.agenda.upsert({
-      where: { businessId },
-      create: { businessId, ...data },
-      update: data,
-      include: { services: { orderBy: { name: 'asc' } } },
-    });
+    const current = await this.prisma.agenda.findFirst({ where: { businessId }, orderBy: { id: 'asc' } });
+    const agenda = current
+      ? await this.prisma.agenda.update({ where: { id: current.id }, data, include: { services: { orderBy: { name: 'asc' } } } })
+      : await this.prisma.agenda.create({ data: { businessId, ...data }, include: { services: { orderBy: { name: 'asc' } } } });
     return {
       ...this.mapAgenda(agenda),
       turns: this.turnStarts(dto.opensAt, dto.closesAt, dto.slotMinutes),
     };
   }
 
-  async createService(businessId: number, dto: CreateAgendaServiceDto, user: AuthUser) {
-    const agenda = await this.requireAgenda(businessId, user);
-    this.assertDuration(dto.durationMinutes, agenda.slotMinutes);
+  async createService(businessId: number, dto: CreateAgendaServiceDto, user: AuthUser, professionalId?: number) {
+    const agenda = await this.requireAgenda(businessId, user, professionalId);
     const service = await this.prisma.agendaService.create({
       data: {
         agendaId: agenda.id,
@@ -172,7 +192,11 @@ export class AgendaService {
         price: new Prisma.Decimal(dto.price),
       },
     });
-    return this.mapService(service);
+    await this.publication.trackCreate(user, businessId, 'AGENDA_SERVICE', service.id, [
+      { field: 'name', label: `Nombre del servicio · ${service.name}`, value: service.name },
+    ]);
+    const [decorated] = await this.publication.decorateServices(user, [this.mapService(service)]);
+    return decorated;
   }
 
   async updateService(serviceId: number, dto: UpdateAgendaServiceDto, user: AuthUser) {
@@ -182,53 +206,60 @@ export class AgendaService {
     });
     if (!current) throw new NotFoundException('Servicio no encontrado');
     await this.assertProfessional(current.agenda.businessId, user);
-    const duration = dto.durationMinutes ?? current.durationMinutes;
-    this.assertDuration(duration, current.agenda.slotMinutes);
+    if (dto.durationMinutes !== undefined) this.assertDuration(dto.durationMinutes, current.agenda.slotMinutes);
+    const nextName = dto.name?.trim();
+    const blocked = nextName
+      ? await this.publication.reviewFields(user, current.agenda.businessId, 'AGENDA_SERVICE', serviceId, [
+          { field: 'name', label: `Nombre del servicio · ${nextName}`, before: current.name, after: nextName },
+        ])
+      : new Set<string>();
     const service = await this.prisma.agendaService.update({
       where: { id: serviceId },
       data: {
-        name: dto.name?.trim(),
+        name: blocked.has('name') ? undefined : nextName,
         durationMinutes: dto.durationMinutes,
         price: dto.price === undefined ? undefined : new Prisma.Decimal(dto.price),
         isActive: dto.isActive,
       },
     });
-    return this.mapService(service);
+    const [decorated] = await this.publication.decorateServices(user, [this.mapService(service)]);
+    return decorated;
   }
 
-  async slots(businessId: number, date: string, serviceId: number, user: AuthUser) {
+  async slots(businessId: number, date: string, serviceId: number, user: AuthUser, professionalId?: number) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date || '')) {
       throw new BadRequestException('Indica la fecha de la cita');
     }
-    const agenda = await this.requireAgenda(businessId, user);
+    const agenda = await this.requireAgenda(businessId, user, professionalId);
     const service = agenda.services.find((item) => item.id === serviceId && item.isActive);
     if (!service) throw new NotFoundException('Servicio no encontrado');
-    const schedule = this.scheduleOf(agenda);
-    const days = schedule.openDays.split(',').map(Number);
-    if (!days.includes(this.weekday(date))) return [];
+    const day = this.dayFor(agenda, date);
+    if (!day) return [];
     const occupied = await this.occupied(agenda.id, date);
-    const open = this.toMinutes(schedule.opensAt);
-    const close = this.toMinutes(schedule.closesAt);
     const now = Date.now();
-    const slots: { time: string; label: string }[] = [];
-    for (let start = open; start + agenda.slotMinutes <= close; start += agenda.slotMinutes) {
-      const time = this.fromMinutes(start);
-      const startsAt = this.limaInstant(date, time);
-      const endsAt = new Date(startsAt.getTime() + agenda.slotMinutes * 60000);
-      if (startsAt.getTime() <= now) continue;
-      if (occupied.some((item) => item.startsAt < endsAt && item.endsAt > startsAt)) continue;
-      slots.push({ time, label: `${time} – ${this.fromMinutes(start + agenda.slotMinutes)}` });
-    }
-    return slots;
+    return day.turns
+      .filter((turn) => turn.active)
+      .filter((turn) => {
+        const startsAt = this.limaInstant(date, turn.startsAt);
+        const endsAt = this.limaInstant(date, turn.endsAt);
+        if (startsAt.getTime() <= now) return false;
+        return !occupied.some((item) => item.startsAt < endsAt && item.endsAt > startsAt);
+      })
+      .map((turn) => ({ time: turn.startsAt, label: `${turn.startsAt} – ${turn.endsAt}` }));
   }
 
-  async days(businessId: number, user: AuthUser, focus?: string) {
+  async days(businessId: number, user: AuthUser, focus?: string, professionalId?: number) {
     if (focus && !/^\d{4}-\d{2}-\d{2}$/.test(focus)) {
       throw new BadRequestException('Indica una fecha válida');
     }
-    const agenda = await this.requireAgenda(businessId, user);
-    const schedule = this.scheduleOf(agenda);
-    const openDays = new Set(schedule.openDays.split(',').filter(Boolean).map(Number));
+    const agenda = await this.requireAgenda(businessId, user, professionalId);
+    let openDays = new Set<number>();
+    try {
+      const schedule = this.scheduleOf(agenda);
+      openDays = new Set(schedule.openDays.split(',').filter(Boolean).map(Number));
+    } catch {
+      openDays = new Set();
+    }
     const today = this.limaDate(new Date());
     const dates = new Set<string>();
     if (focus) {
@@ -272,13 +303,13 @@ export class AgendaService {
         appointments: active.length,
         cancelled: rows.length - active.length,
         bookedTurns: active.reduce((sum, row) => sum + Math.max(row.turnItems.length, 1), 0),
-        freeTurns: this.countFree(date, schedule, agenda.slotMinutes, booked),
+        freeTurns: this.freeOn(date, this.dayFor(agenda, date), booked),
       };
     });
   }
 
-  async appointments(businessId: number, user: AuthUser) {
-    const agenda = await this.requireAgenda(businessId, user);
+  async appointments(businessId: number, user: AuthUser, professionalId?: number) {
+    const agenda = await this.requireAgenda(businessId, user, professionalId);
     const rows = await this.prisma.appointment.findMany({
       where: { agendaId: agenda.id },
       include: appointmentInclude,
@@ -288,34 +319,29 @@ export class AgendaService {
   }
 
   async createAppointment(businessId: number, dto: CreateAppointmentDto, user: AuthUser) {
-    const agenda = await this.requireAgenda(businessId, user);
-    const schedule = this.scheduleOf(agenda);
+    const agenda = await this.requireAgenda(businessId, user, dto.professionalId);
+    const day = this.dayFor(agenda, dto.date);
     const service = agenda.services.find((item) => item.id === dto.serviceId && item.isActive);
     if (!service) throw new NotFoundException('Servicio no encontrado');
-    const days = schedule.openDays.split(',').map(Number);
-    if (!days.includes(this.weekday(dto.date))) {
-      throw new BadRequestException('La agenda no atiende ese día');
+    if (!(await this.publication.assertPublished('AGENDA_SERVICE', service.id))) {
+      throw new BadRequestException('Pendiente de aprobación');
     }
+    if (!day) throw new BadRequestException('Ese día no tiene horario configurado');
     const times = [...new Set(dto.times)].sort();
-    const openMinute = this.toMinutes(schedule.opensAt);
-    const closeMinute = this.toMinutes(schedule.closesAt);
-    const ranges = times.map((time) => {
-      const startMinute = this.toMinutes(time);
-      if (startMinute < openMinute || (startMinute - openMinute) % agenda.slotMinutes !== 0) {
-        throw new BadRequestException('Ese horario no corresponde a un turno de la agenda');
-      }
-      if (startMinute + agenda.slotMinutes > closeMinute) {
-        throw new BadRequestException('Ese turno no cabe en la atención del día');
+    const byStart = new Map(day.turns.map((turn) => [turn.startsAt, turn]));
+    const ranges = times.map((time, index) => {
+      const turn = byStart.get(time);
+      if (!turn || !turn.active) throw new BadRequestException('Ese turno no está libre');
+      if (index > 0 && this.toMinutes(time) - this.toMinutes(times[index - 1]) !== day.slotMinutes) {
+        throw new BadRequestException('Los turnos de una cita deben ser consecutivos');
       }
       const startsAt = this.limaInstant(dto.date, time);
-      const endsAt = new Date(startsAt.getTime() + agenda.slotMinutes * 60000);
-      if (startsAt.getTime() <= Date.now()) {
-        throw new BadRequestException('Ese horario ya pasó');
-      }
+      const endsAt = this.limaInstant(dto.date, turn.endsAt);
+      if (startsAt.getTime() <= Date.now()) throw new BadRequestException('Ese horario ya pasó');
       return { startsAt, endsAt };
     });
     const turns = ranges.length;
-    const duration = turns * agenda.slotMinutes;
+    const duration = turns * day.slotMinutes;
     const phone = this.phoneOrThrow(dto.clientPhone);
     const point = this.pickPoint(agenda.business.pointSales, dto.pointSaleId);
     const appointment = await this.prisma.$transaction(async (tx) => {
@@ -346,14 +372,15 @@ export class AgendaService {
           clientAddress: dto.clientAddress.trim(),
           clientDni: dto.clientDni,
           pointSaleId: point?.id,
-          professionalPhone: point?.phone,
+          professionalPhone: agenda.professional?.phone || point?.phone,
+          notes: dto.notes?.trim() || null,
           startsAt: ranges[0].startsAt,
           endsAt: ranges[ranges.length - 1].endsAt,
           status: AppointmentStatus.PENDIENTE,
           turnItems: { create: ranges },
         },
       });
-      await this.addNotices(tx, created.id, agenda, {
+      await this.addNotices(tx, created.id, { ...agenda, notifyClient: dto.notifyClient !== false && agenda.notifyClient }, {
         status: AppointmentStatus.PENDIENTE,
         serviceName: service.name,
         clientName: dto.clientName.trim(),
@@ -443,14 +470,73 @@ export class AgendaService {
     return this.reload(appointmentId);
   }
 
-  private async requireAgenda(businessId: number, user: AuthUser) {
+  private async requireAgenda(businessId: number, user: AuthUser, professionalId?: number) {
     const business = await this.assertProfessional(businessId, user);
-    const agenda = await this.prisma.agenda.findUnique({
-      where: { businessId },
-      include: { services: true },
+    const agenda = await this.prisma.agenda.findFirst({
+      where: { businessId, ...(professionalId ? { professionalId } : {}) },
+      include: {
+        services: true,
+        professional: true,
+        days: { include: { turns: { orderBy: { startsAt: 'asc' } } } },
+      },
+      orderBy: { id: 'asc' },
     });
-    if (!agenda) throw new BadRequestException('Registra primero el horario de la agenda');
+    if (!agenda) throw new BadRequestException('Registra primero un profesional para la agenda');
+    if (agenda.professional && !agenda.professional.agendaControl) {
+      throw new ForbiddenException('Tu plan no controla la agenda de este profesional');
+    }
+    if (!professionalId) {
+      const count = await this.prisma.agenda.count({ where: { businessId } });
+      if (count > 1) throw new BadRequestException('Elige el profesional');
+    }
     return { ...agenda, business };
+  }
+
+  private async assertOwner(businessId: number, user: AuthUser) {
+    const business = await this.prisma.business.findUnique({
+      where: { id: businessId },
+      include: { rubro: true },
+    });
+    if (!business) throw new NotFoundException('Negocio no encontrado');
+    if (!business.rubro.allowsAgenda) {
+      throw new ForbiddenException('Los profesionales se registran en el rubro de profesionales independientes');
+    }
+    if (user.userType !== UserType.ADMIN && business.userId !== user.id) {
+      throw new ForbiddenException('No puedes modificar los profesionales de este negocio');
+    }
+    return business;
+  }
+
+  private async fillAgendaSlot(businessId: number, max: number) {
+    if (max <= 0) return;
+    const rows = await this.prisma.professional.findMany({ where: { businessId }, orderBy: { id: 'asc' } });
+    const marked = rows.filter((row) => row.agendaControl);
+    if (marked.length > max) {
+      await this.prisma.professional.updateMany({
+        where: { id: { in: marked.slice(max).map((row) => row.id) } },
+        data: { agendaControl: false },
+      });
+    }
+    if (!marked.length && rows[0]) {
+      await this.prisma.professional.update({ where: { id: rows[0].id }, data: { agendaControl: true } });
+    }
+  }
+
+  private async claimAgendaSlot(businessId: number, professionalId: number) {
+    const max = await this.professionalLimit(businessId);
+    if (max <= 0) throw new BadRequestException('Tu plan no incluye el control de agenda');
+    const others = await this.prisma.professional.count({
+      where: { businessId, agendaControl: true, id: { not: professionalId } },
+    });
+    if (others < max) return;
+    if (max === 1) {
+      await this.prisma.professional.updateMany({
+        where: { businessId, id: { not: professionalId } },
+        data: { agendaControl: false },
+      });
+      return;
+    }
+    throw new BadRequestException(`El plan anual controla la agenda de hasta ${max} profesionales`);
   }
 
   private async assertProfessional(businessId: number, user: AuthUser) {
@@ -459,14 +545,14 @@ export class AgendaService {
       include: { rubro: true, pointSales: true },
     });
     if (!business) throw new NotFoundException('Negocio no encontrado');
-    if (!/profesional/i.test(business.rubro.name)) {
+    if (!business.rubro.allowsAgenda) {
       throw new ForbiddenException('La agenda solo aplica al rubro de profesionales independientes');
     }
     if (user.userType !== UserType.ADMIN && business.userId !== user.id) {
       throw new ForbiddenException('No puedes modificar esta agenda');
     }
     if (user.userType !== UserType.ADMIN && !(await this.isEnabled(user.id))) {
-      throw new ForbiddenException('La agenda no está activa para tu cuenta');
+      throw new ForbiddenException('Tu plan no incluye el módulo Agenda');
     }
     return business;
   }
@@ -474,9 +560,27 @@ export class AgendaService {
   private async isEnabled(userId: number) {
     const row = await this.prisma.user.findUnique({
       where: { id: userId },
-      select: { agendaEnabled: true },
+      select: {
+        planId: true,
+        planCatalog: true,
+        businesses: { where: { rubro: { allowsAgenda: true } }, select: { id: true }, take: 1 },
+      },
     });
-    return Boolean(row?.agendaEnabled);
+    if (!row?.businesses.length || !row.planCatalog) return false;
+    return planFlags(row.planCatalog).agenda;
+  }
+
+  private async professionalLimit(businessId: number) {
+    const business = await this.prisma.business.findUnique({
+      where: { id: businessId },
+      select: { user: { select: { planCatalog: true } } },
+    });
+    const plan = business?.user.planCatalog;
+    if (!plan || !planFlags(plan).agenda) return 0;
+    if (!/anual/i.test(plan.name)) return 1;
+    const current = await this.prisma.appSetting.findUnique({ where: { id: 1 } });
+    const max = current?.maxAgendaProfessionals ?? 3;
+    return max > 0 ? max : 3;
   }
 
   private async findOwned(appointmentId: number, user: AuthUser) {
@@ -589,7 +693,191 @@ export class AgendaService {
     if (rows.length) await tx.appointmentNotice.createMany({ data: rows });
   }
 
-  private scheduleOf(agenda: { opensAt: string | null; closesAt: string | null; openDays: string | null }) {
+  async dayBoard(businessId: number, user: AuthUser, professionalId: number, date: string) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date || '')) throw new BadRequestException('Indica la fecha');
+    const agenda = await this.requireAgenda(businessId, user, professionalId);
+    const day = this.dayFor(agenda, date);
+    const appointments = await this.prisma.appointment.findMany({
+      where: { agendaId: agenda.id, status: { not: AppointmentStatus.ANULADA } },
+      include: { turnItems: true },
+    });
+    const taken = new Map<string, { clientName: string; appointmentId: number }>();
+    for (const row of appointments) {
+      if (this.limaDate(row.startsAt) !== date) continue;
+      const marks = row.turnItems.length ? row.turnItems : [{ startsAt: row.startsAt }];
+      for (const turn of marks) taken.set(this.limaTime(turn.startsAt), { clientName: row.clientName, appointmentId: row.id });
+    }
+    const turns = (day?.turns || []).map((turn) => {
+      const booked = taken.get(turn.startsAt);
+      return {
+        startsAt: turn.startsAt,
+        endsAt: turn.endsAt,
+        active: turn.active,
+        estado: !turn.active ? 'inactivo' : booked ? 'separado' : 'libre',
+        clientName: booked?.clientName || null,
+        appointmentId: booked?.appointmentId || null,
+      };
+    });
+    return {
+      configured: Boolean(day),
+      source: day?.onDate ? 'fecha' : 'semana',
+      opensAt: day?.opensAt || '',
+      closesAt: day?.closesAt || '',
+      slotMinutes: day?.slotMinutes || agenda.slotMinutes,
+      weekday: this.weekday(date),
+      turns,
+    };
+  }
+
+  async loadSchedule(businessId: number, user: AuthUser, professionalId: number, mode: string, weekday?: number, date?: string) {
+    const agenda = await this.requireAgenda(businessId, user, professionalId);
+    if (mode === 'fecha' && date && /^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      const day = this.weekday(date);
+      const exact = agenda.days.find((row) => row.onDate && row.onDate.toISOString().slice(0, 10) === date);
+      const weekly = agenda.days.find((row) => row.weekday === day && !row.onDate);
+      return { ...this.schedulePayload(exact || weekly, Boolean(exact)), weekday: day, habitual: Boolean(weekly) };
+    }
+    const weekly = agenda.days.find((row) => row.weekday === weekday && !row.onDate);
+    return { ...this.schedulePayload(weekly, false), weekday: weekday ?? null, habitual: Boolean(weekly) };
+  }
+
+  private schedulePayload(
+    day: { opensAt: string; closesAt: string; slotMinutes: number; turns: { startsAt: string; endsAt: string; active: boolean }[] } | undefined,
+    customized: boolean,
+  ) {
+    if (!day) return { configured: false, customized, opensAt: '09:00', closesAt: '18:00', slotMinutes: 30, turns: [] as { startsAt: string; endsAt: string; active: boolean }[] };
+    return {
+      configured: true,
+      customized,
+      opensAt: day.opensAt,
+      closesAt: day.closesAt,
+      slotMinutes: day.slotMinutes,
+      turns: day.turns.map((turn) => ({ startsAt: turn.startsAt, endsAt: turn.endsAt, active: turn.active })),
+    };
+  }
+
+  async saveSchedule(businessId: number, user: AuthUser, body: Record<string, unknown>) {
+    const professionalId = Number(body.professionalId);
+    const agenda = await this.requireAgenda(businessId, user, professionalId);
+    const opensAt = String(body.opensAt || '');
+    const closesAt = String(body.closesAt || '');
+    const slotMinutes = Number(body.slotMinutes);
+    if (![15, 30, 60].includes(slotMinutes)) throw new BadRequestException('La duración del turno es 15, 30 o 60 minutos');
+    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(opensAt) || !/^([01]\d|2[0-3]):[0-5]\d$/.test(closesAt)) {
+      throw new BadRequestException('Indica la hora de inicio y de fin');
+    }
+    if (this.toMinutes(closesAt) <= this.toMinutes(opensAt)) {
+      throw new BadRequestException('La hora de cierre debe ser posterior a la de apertura');
+    }
+    const incoming = Array.isArray(body.turns) ? body.turns : [];
+    const turns = (incoming.length ? incoming : this.generated(opensAt, closesAt, slotMinutes)).map((turn) => {
+      const row = turn as { startsAt?: string; endsAt?: string; active?: boolean };
+      return {
+        startsAt: String(row.startsAt),
+        endsAt: String(row.endsAt),
+        active: row.active !== false,
+      };
+    });
+    const mode = body.mode === 'fecha' ? 'fecha' : 'semana';
+    await this.prisma.$transaction(async (tx) => {
+      if (mode === 'fecha') {
+        const date = String(body.date || '');
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new BadRequestException('Indica la fecha');
+        const weekday = this.weekday(date);
+        const habitual = await tx.agendaDay.findFirst({ where: { agendaId: agenda.id, weekday, onDate: null } });
+        if (!habitual) {
+          throw new BadRequestException(`Configura primero el horario de todos los ${this.weekdayName(weekday)}`);
+        }
+        await tx.agendaDay.deleteMany({ where: { agendaId: agenda.id, onDate: new Date(`${date}T00:00:00.000Z`) } });
+        await tx.agendaDay.create({
+          data: {
+            agendaId: agenda.id,
+            onDate: new Date(`${date}T00:00:00.000Z`),
+            opensAt,
+            closesAt,
+            slotMinutes,
+            turns: { create: turns },
+          },
+        });
+      } else {
+        const weekday = Number(body.weekday);
+        if (!Number.isInteger(weekday) || weekday < 0 || weekday > 6) throw new BadRequestException('Elige el día de la semana');
+        await tx.agendaDay.deleteMany({ where: { agendaId: agenda.id, weekday, onDate: null } });
+        await tx.agendaDay.create({
+          data: { agendaId: agenda.id, weekday, opensAt, closesAt, slotMinutes, turns: { create: turns } },
+        });
+      }
+    });
+    return this.dayBoard(businessId, user, professionalId, mode === 'fecha' ? String(body.date) : this.nextDateForWeekday(Number(body.weekday)));
+  }
+
+  private dayFor(
+    agenda: {
+      opensAt: string | null;
+      closesAt: string | null;
+      openDays: string | null;
+      slotMinutes: number;
+      days: { weekday: number | null; onDate: Date | null; opensAt: string; closesAt: string; slotMinutes: number; turns: { startsAt: string; endsAt: string; active: boolean }[] }[];
+    },
+    date: string,
+  ) {
+    const exact = agenda.days.find((day) => day.onDate && day.onDate.toISOString().slice(0, 10) === date);
+    if (exact) return exact;
+    const weekday = this.weekday(date);
+    const weekly = agenda.days.find((day) => day.weekday === weekday && !day.onDate);
+    if (weekly) return weekly;
+    if (!agenda.opensAt || !agenda.closesAt || !agenda.openDays) return null;
+    if (!agenda.openDays.split(',').map(Number).includes(weekday)) return null;
+    return {
+      weekday,
+      onDate: null as Date | null,
+      opensAt: agenda.opensAt,
+      closesAt: agenda.closesAt,
+      slotMinutes: agenda.slotMinutes,
+      turns: this.generated(agenda.opensAt, agenda.closesAt, agenda.slotMinutes),
+    };
+  }
+
+  private generated(opensAt: string, closesAt: string, slotMinutes: number) {
+    const open = this.toMinutes(opensAt);
+    const close = this.toMinutes(closesAt);
+    const turns: { startsAt: string; endsAt: string; active: boolean }[] = [];
+    for (let start = open; start + slotMinutes <= close; start += slotMinutes) {
+      turns.push({ startsAt: this.fromMinutes(start), endsAt: this.fromMinutes(start + slotMinutes), active: true });
+    }
+    return turns;
+  }
+
+  private nextDateForWeekday(weekday: number) {
+    const today = this.limaDate(new Date());
+    for (let offset = 0; offset < 7; offset += 1) {
+      const date = this.addDays(today, offset);
+      if (this.weekday(date) === weekday) return date;
+    }
+    return today;
+  }
+
+  private freeOn(date: string, day: { slotMinutes: number; turns: { startsAt: string; endsAt: string; active: boolean }[] } | null, occupied: { startsAt: Date; endsAt: Date }[]) {
+    if (!day) return 0;
+    const now = Date.now();
+    return day.turns.filter((turn) => {
+      if (!turn.active) return false;
+      const startsAt = this.limaInstant(date, turn.startsAt);
+      const endsAt = this.limaInstant(date, turn.endsAt);
+      if (startsAt.getTime() <= now) return false;
+      return !occupied.some((item) => item.startsAt < endsAt && item.endsAt > startsAt);
+    }).length;
+  }
+
+  private scheduleOf(agenda: { opensAt: string | null; closesAt: string | null; openDays: string | null; days?: { weekday: number | null; onDate: Date | null }[] }) {
+    const weekly = (agenda.days || []).filter((day) => day.weekday != null && !day.onDate);
+    if (weekly.length) {
+      return {
+        opensAt: agenda.opensAt || '09:00',
+        closesAt: agenda.closesAt || '18:00',
+        openDays: weekly.map((day) => day.weekday).join(','),
+      };
+    }
     if (!agenda.opensAt || !agenda.closesAt || !agenda.openDays) {
       throw new BadRequestException('Registra los días y el horario de la agenda');
     }
@@ -710,6 +998,10 @@ export class AgendaService {
   private weekday(date: string) {
     const [year, month, day] = date.split('-').map(Number);
     return new Date(Date.UTC(year, month - 1, day)).getUTCDay();
+  }
+
+  private weekdayName(weekday: number) {
+    return ['domingos', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábados'][weekday] || 'días';
   }
 
   private limaInstant(date: string, time: string) {

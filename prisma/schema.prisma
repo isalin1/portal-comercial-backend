@@ -34,19 +34,40 @@ model DatUser {
   @@map("dat_users")
 }
 
+model AppSetting {
+  id            Int    @id @default(1)
+  salesWhatsapp          String @default("940485657") @map("whatsapp_planes")
+  freePlanDays           Int    @default(30) @map("vigencia_plan_free")
+  maxAgendaProfessionals Int    @default(3) @map("max_profesionales_agenda")
+
+  @@map("app_settings")
+}
+
 model User {
   id       Int     @id @default(autoincrement())
   password String  @map("password_hash")
   isActive Boolean @default(true) @map("estado")
   agendaEnabled Boolean @default(false) @map("agenda_activa")
+  plan          String? @map("plan")
 
   vigenciaStart DateTime? @map("fecha_inicio_vigencia") @db.Date
   vigenciaEnd   DateTime? @map("fecha_fin_vigencia") @db.Date
+  vigenciaDays  Int?      @map("vigencia_dias")
+
+  planId      Int?  @map("plan_id")
+  planCatalog Plan? @relation("UserPlan", fields: [planId], references: [id], onDelete: SetNull)
+
+  pendingPlanId Int?  @map("plan_pendiente_id")
+  pendingPlan   Plan? @relation("UserPendingPlan", fields: [pendingPlanId], references: [id], onDelete: SetNull)
+
+  termsAcceptedAt DateTime? @map("fecha_aceptacion_terminos")
 
   datUserId Int     @unique @map("dat_user_id")
   datUser   DatUser @relation(fields: [datUserId], references: [id], onDelete: Cascade)
 
   businesses Business[]
+  clientOrders CustomerOrder[]
+  planPayments PlanPayment[]
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -85,6 +106,7 @@ model District {
   provinceId Int       @map("province_id")
   province   Province  @relation(fields: [provinceId], references: [id])
   addresses  Address[]
+  zones      Zone[]
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -93,10 +115,52 @@ model District {
   @@map("districts")
 }
 
+model Plan {
+  id             Int     @id @default(autoincrement())
+  name           String  @unique @map("nombre")
+  days           Int     @map("dias")
+  commercialName String  @map("nombre_comercial")
+  price          Decimal @db.Decimal(10, 2) @map("precio")
+  showProducts   Boolean @default(false) @map("muestra_productos")
+  whatsappButton Boolean @default(false) @map("boton_whatsapp")
+  showPhone      Boolean @default(false) @map("muestra_telefono")
+  operatorOrders Boolean @default(false) @map("pedidos_empresario")
+  clientOrders   Boolean @default(false) @map("pedidos_cliente")
+  daySummary     Boolean @default(false) @map("resumen")
+  agenda         Boolean @default(false) @map("agenda")
+  users          User[] @relation("UserPlan")
+  pendingUsers   User[] @relation("UserPendingPlan")
+  payments       PlanPayment[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("plans")
+}
+
+model PlanPayment {
+  id             Int      @id @default(autoincrement())
+  userId         Int      @map("user_id")
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  planId         Int      @map("plan_id")
+  plan           Plan     @relation(fields: [planId], references: [id], onDelete: Restrict)
+  days           Int      @map("dias")
+  amount         Decimal  @db.Decimal(10, 2) @map("monto")
+  planName       String   @map("nombre_plan")
+  commercialName String   @map("nombre_comercial")
+  paidOn         DateTime @db.Date @map("fecha")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  @@index([paidOn])
+  @@map("plan_payments")
+}
+
 model Rubro {
-  id         Int        @id @default(autoincrement())
-  name       String     @unique
-  imageUrl   String?    @map("imagen_url")
+  id           Int        @id @default(autoincrement())
+  name         String     @unique
+  imageUrl     String?    @map("imagen_url")
+  allowsOrders Boolean    @default(true) @map("permite_pedidos")
+  allowsAgenda Boolean    @default(false) @map("permite_agenda")
   categories Category[]
   businesses Business[]
 
@@ -125,8 +189,9 @@ model Category {
 model Business {
   id             Int     @id @default(autoincrement())
   legalName      String  @map("razon_social")
-  commercialName String  @map("nombre_comercial")
-  imageUrl       String? @map("imagen_url")
+  commercialName        String  @map("nombre_comercial")
+  commercialDescription String  @default("") @map("descripcion_comercial") @db.VarChar(50)
+  imageUrl              String? @map("imagen_url")
   numDoc         String  @unique @map("num_doc")
   docType        DocType @map("tipo_doc")
 
@@ -136,16 +201,91 @@ model Business {
   categoryId Int?      @map("categoria_id")
   category   Category? @relation(fields: [categoryId], references: [id])
 
+  marketId Int?    @map("mercado_id")
+  market   Market? @relation(fields: [marketId], references: [id], onDelete: SetNull)
+
+  zoneId Int?  @map("zona_id")
+  zone   Zone? @relation(fields: [zoneId], references: [id], onDelete: Restrict)
+
   userId Int  @map("user_id")
   user   User @relation(fields: [userId], references: [id])
 
   pointSales PointSale[]
-  agenda     Agenda?
+  agendas    Agenda[]
+  professionals Professional[]
+  menuOffers MenuOffer[]
+  orders     CustomerOrder[]
+  clients    BusinessClient[]
+  publicationChanges PublicationChange[]
+  requireOrderPayment Boolean @default(false) @map("exige_pago_pedido")
+  chargesDelivery     Boolean @default(false) @map("cobra_delivery")
+  deliveryFee         Decimal @default(0) @db.Decimal(10, 2) @map("costo_delivery")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
   @@map("businesses")
+}
+
+model PublicationChange {
+  id         Int      @id @default(autoincrement())
+  businessId Int      @map("negocio_id")
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  scope      String   @map("ambito")
+  recordId   Int      @map("registro_id")
+  field      String   @map("campo")
+  label      String   @map("etiqueta")
+  kind       String   @map("tipo")
+  beforeText String?  @map("antes") @db.Text
+  afterText  String?  @map("despues") @db.Text
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@unique([scope, recordId, field])
+  @@index([businessId, createdAt])
+  @@map("publication_changes")
+}
+
+model CommercialGroup {
+  id       Int      @id @default(autoincrement())
+  name     String   @unique
+  markets  Market[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("commercial_groups")
+}
+
+model Market {
+  id         Int             @id @default(autoincrement())
+  name       String
+  imageUrl   String?         @map("imagen_url")
+  groupId    Int             @map("grupo_id")
+  group      CommercialGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  zoneId     Int?            @map("zona_id")
+  zone       Zone?           @relation(fields: [zoneId], references: [id])
+  businesses Business[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@unique([zoneId, name])
+  @@map("markets")
+}
+
+model Zone {
+  id         Int        @id @default(autoincrement())
+  name       String     @map("nombre")
+  districtId Int        @map("distrito_id")
+  district   District   @relation(fields: [districtId], references: [id])
+  businesses Business[]
+  markets    Market[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@unique([districtId, name])
+  @@map("zones")
 }
 
 model Address {
@@ -172,6 +312,8 @@ model PointSale {
   opensAt  String? @map("abre") @db.VarChar(5)
   closesAt String? @map("cierra") @db.VarChar(5)
   openDays String? @map("dias")
+  chargesDelivery Boolean @default(false) @map("cobra_delivery")
+  deliveryFee     Decimal @default(0) @db.Decimal(10, 2) @map("costo_delivery")
 
   businessId Int      @map("business_id")
   business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
@@ -180,6 +322,7 @@ model PointSale {
   address   Address @relation(fields: [addressId], references: [id])
 
   items Item[]
+  orders CustomerOrder[]
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -187,11 +330,24 @@ model PointSale {
   @@map("point_sales")
 }
 
+enum ItemKind {
+  CARTA
+  MENU
+}
+
+enum MenuPart {
+  ENTRADA
+  SEGUNDO
+  REFRESCO
+}
+
 model Item {
-  id        Int     @id @default(autoincrement())
+  id        Int      @id @default(autoincrement())
   name      String
-  imageUrl  String? @map("imagen_url")
-  isActive  Boolean @default(true) @map("estado")
+  imageUrl  String?  @map("imagen_url")
+  isActive  Boolean  @default(true) @map("estado")
+  kind      ItemKind @default(CARTA) @map("tipo_plato")
+  menuPart  MenuPart? @map("parte_menu")
 
   pointSaleId Int       @map("punto_venta_id")
   pointSale   PointSale @relation(fields: [pointSaleId], references: [id], onDelete: Cascade)
@@ -199,7 +355,13 @@ model Item {
   categoryId Int      @map("categoria_id")
   category   Category @relation(fields: [categoryId], references: [id])
 
+  menuOfferId Int?       @map("menu_offer_id")
+  menuOffer   MenuOffer? @relation(fields: [menuOfferId], references: [id], onDelete: SetNull)
+
   descriptions ItemDescription[]
+  availabilities ItemAvailability[]
+  orderMenuDishes OrderMenuDish[]
+  menuLinks ItemMenuOffer[]
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -207,10 +369,46 @@ model Item {
   @@map("items")
 }
 
+model ItemMenuOffer {
+  itemId      Int       @map("item_id")
+  menuOfferId Int       @map("menu_offer_id")
+  item        Item      @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  menuOffer   MenuOffer @relation(fields: [menuOfferId], references: [id], onDelete: Cascade)
+
+  @@id([itemId, menuOfferId])
+  @@map("item_menu_offers")
+}
+
+model ItemAvailability {
+  id        Int      @id @default(autoincrement())
+  day       DateTime @db.Date
+  available Boolean  @default(true) @map("disponible")
+  itemId    Int      @map("item_id")
+  item      Item     @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  @@unique([itemId, day])
+  @@map("item_availability")
+}
+
+model Unit {
+  id   Int    @id @default(autoincrement())
+  name String @unique @map("nombre")
+
+  descriptions ItemDescription[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("units")
+}
+
 model ItemDescription {
   id          Int     @id @default(autoincrement())
-  description String  @map("descripcion")
-  price       Decimal @db.Decimal(10, 2) @map("precio")
+  description String   @map("descripcion")
+  price       Decimal? @db.Decimal(10, 2) @map("precio")
+
+  unitId Int?  @map("unidad_id")
+  unit   Unit? @relation(fields: [unitId], references: [id])
 
   itemId Int  @map("item_id")
   item   Item @relation(fields: [itemId], references: [id], onDelete: Cascade)
@@ -232,6 +430,22 @@ enum AgendaNoticeTarget {
   PROFESIONAL
 }
 
+model Professional {
+  id         Int      @id @default(autoincrement())
+  name          String   @map("nombre")
+  phone         String?  @map("celular")
+  isActive      Boolean  @default(true) @map("estado")
+  agendaControl Boolean  @default(false) @map("control_agenda")
+  businessId Int      @map("negocio_id")
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  agenda     Agenda?
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("professionals")
+}
+
 model Agenda {
   id                   Int      @id @default(autoincrement())
   slotMinutes          Int      @default(30) @map("minutos_turno")
@@ -242,16 +456,51 @@ model Agenda {
   notifyProfessional   Boolean  @default(true) @map("avisar_profesional")
   requiresPayment      Boolean  @default(false) @map("requiere_pago")
 
-  businessId Int      @unique @map("business_id")
+  businessId Int      @map("business_id")
   business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  professionalId Int?          @unique @map("profesional_id")
+  professional   Professional? @relation(fields: [professionalId], references: [id], onDelete: Cascade)
 
   services     AgendaService[]
   appointments Appointment[]
+  days         AgendaDay[]
+
+  @@index([businessId])
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
   @@map("agendas")
+}
+
+model AgendaDay {
+  id          Int       @id @default(autoincrement())
+  weekday     Int?      @map("dia_semana")
+  onDate      DateTime? @db.Date @map("fecha")
+  opensAt     String    @map("abre") @db.VarChar(5)
+  closesAt    String    @map("cierra") @db.VarChar(5)
+  slotMinutes Int       @map("minutos_turno")
+
+  agendaId Int    @map("agenda_id")
+  agenda   Agenda @relation(fields: [agendaId], references: [id], onDelete: Cascade)
+  turns    AgendaSlot[]
+
+  @@unique([agendaId, weekday])
+  @@unique([agendaId, onDate])
+  @@map("agenda_days")
+}
+
+model AgendaSlot {
+  id       Int     @id @default(autoincrement())
+  startsAt String  @map("inicio") @db.VarChar(5)
+  endsAt   String  @map("fin") @db.VarChar(5)
+  active   Boolean @default(true) @map("activo")
+
+  dayId Int       @map("dia_id")
+  day   AgendaDay @relation(fields: [dayId], references: [id], onDelete: Cascade)
+
+  @@map("agenda_slots")
 }
 
 model AgendaService {
@@ -285,6 +534,7 @@ model Appointment {
   clientDni       String            @map("cliente_dni")
   pointSaleId     Int?              @map("punto_venta_id")
   professionalPhone String?         @map("profesional_celular")
+  notes           String?           @map("notas")
   startsAt        DateTime          @map("inicio")
   endsAt          DateTime          @map("fin")
   status          AppointmentStatus @default(PENDIENTE) @map("estado")
@@ -342,4 +592,137 @@ model AppointmentNotice {
   createdAt DateTime @default(now()) @map("created_at")
 
   @@map("appointment_notices")
+}
+
+enum OrderFulfillment {
+  RECOJO
+  DELIVERY
+}
+
+enum OrderStatus {
+  PENDIENTE_APROBACION
+  REGISTRADO
+  ATENCION
+  LISTO
+  DESPACHADO
+  ENTREGADO
+  ANULADO
+}
+
+enum OrderLineKind {
+  CARTA
+  MENU
+}
+
+model BusinessClient {
+  id         Int     @id @default(autoincrement())
+  name       String  @map("nombre")
+  phone      String  @map("celular")
+  address    String? @map("direccion")
+  businessId Int     @map("business_id")
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  orders     CustomerOrder[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@unique([businessId, phone])
+  @@map("business_clients")
+}
+
+model OrderStage {
+  id        Int         @id @default(autoincrement())
+  status    OrderStatus @map("estado")
+  startedAt DateTime    @default(now()) @map("iniciado_en")
+  orderId   Int         @map("pedido_id")
+  order     CustomerOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@unique([orderId, status])
+  @@map("order_stages")
+}
+
+model MenuOffer {
+  id         Int     @id @default(autoincrement())
+  name       String  @map("nombre")
+  price      Decimal @db.Decimal(10, 2) @map("precio")
+  isActive   Boolean @default(true) @map("estado")
+  businessId Int     @map("business_id")
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  items      Item[]
+  itemLinks  ItemMenuOffer[]
+  lines      OrderLine[]
+
+  @@map("menu_offers")
+}
+
+model CustomerOrder {
+  id            Int              @id @default(autoincrement())
+  clientName    String           @map("cliente_nombre")
+  clientPhone   String           @map("cliente_celular")
+  clientAddress String?          @map("cliente_direccion")
+  fulfillment   OrderFulfillment @map("entrega")
+  status        OrderStatus      @default(REGISTRADO) @map("estado")
+
+  businessId Int      @map("business_id")
+  business   Business @relation(fields: [businessId], references: [id])
+
+  clientId Int?            @map("client_id")
+  client   BusinessClient? @relation(fields: [clientId], references: [id])
+  clientUserId Int?  @map("client_user_id")
+  clientUser   User? @relation(fields: [clientUserId], references: [id])
+  pointSaleId Int?       @map("point_sale_id")
+  pointSale   PointSale? @relation(fields: [pointSaleId], references: [id])
+  paymentWaived Boolean @default(false) @map("registrado_sin_pago")
+  deliveryFee   Decimal @default(0) @db.Decimal(10, 2) @map("costo_delivery")
+
+  lines    OrderLine[]
+  payments OrderPayment[]
+  stages   OrderStage[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("customer_orders")
+}
+
+model OrderLine {
+  id                Int           @id @default(autoincrement())
+  kind              OrderLineKind @map("tipo")
+  name              String        @map("nombre")
+  unitPrice         Decimal       @db.Decimal(10, 2) @map("precio_unitario")
+  quantityRequested Decimal       @db.Decimal(10, 3) @map("cantidad_pedida")
+  quantityServed    Decimal       @db.Decimal(10, 3) @map("cantidad_atendida")
+
+  orderId     Int           @map("pedido_id")
+  order       CustomerOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  menuOfferId Int?          @map("menu_offer_id")
+  menuOffer   MenuOffer?    @relation(fields: [menuOfferId], references: [id])
+  dishes      OrderMenuDish[]
+
+  @@map("order_lines")
+}
+
+model OrderMenuDish {
+  id       Int      @id @default(autoincrement())
+  menuPart MenuPart @map("parte")
+  name     String   @map("nombre")
+
+  lineId Int       @map("linea_id")
+  line   OrderLine @relation(fields: [lineId], references: [id], onDelete: Cascade)
+  itemId Int       @map("item_id")
+  item   Item      @relation(fields: [itemId], references: [id])
+
+  @@map("order_menu_dishes")
+}
+
+model OrderPayment {
+  id     Int     @id @default(autoincrement())
+  amount Decimal @db.Decimal(10, 2) @map("monto")
+
+  orderId Int           @map("pedido_id")
+  order   CustomerOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("order_payments")
 }

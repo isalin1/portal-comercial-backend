@@ -2,6 +2,7 @@ import {
   Controller,
   Get,
   Post,
+  Put,
   Body,
   Patch,
   Param,
@@ -42,6 +43,21 @@ export class ItemController {
       user,
       pointSaleId ? Number(pointSaleId) : undefined,
     );
+  }
+
+  @Get('availability')
+  @Auth(UserType.EMPRESARIO, UserType.ADMIN)
+  availability(@GetUser() user: AuthUser, @Query('date') date?: string) {
+    return this.itemService.availability(user, date);
+  }
+
+  @Put('availability')
+  @Auth(UserType.EMPRESARIO, UserType.ADMIN)
+  setAvailability(
+    @GetUser() user: AuthUser,
+    @Body() body: { date?: string; itemIds?: number[] },
+  ) {
+    return this.itemService.setAvailability(user, body.date, body.itemIds || []);
   }
 
   @Get(':id')

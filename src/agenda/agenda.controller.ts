@@ -9,7 +9,6 @@ import { CreateAgendaServiceDto } from './dto/create-agenda-service.dto';
 import { UpdateAgendaServiceDto } from './dto/update-agenda-service.dto';
 import { CreateAppointmentDto } from './dto/create-appointment.dto';
 import { CreateAppointmentPaymentDto } from './dto/create-appointment-payment.dto';
-import { UpdateAgendaAccessDto } from './dto/update-agenda-access.dto';
 
 @Controller('agenda')
 @Auth(UserType.EMPRESARIO, UserType.ADMIN)
@@ -19,21 +18,6 @@ export class AgendaController {
   @Get('access/me')
   accessMe(@GetUser() user: AuthUser) {
     return this.agendaService.accessMe(user);
-  }
-
-  @Get('access')
-  @Auth(UserType.ADMIN)
-  listAccess() {
-    return this.agendaService.listAccess();
-  }
-
-  @Patch('access/:userId')
-  @Auth(UserType.ADMIN)
-  setAccess(
-    @Param('userId', ParseIntPipe) userId: number,
-    @Body() dto: UpdateAgendaAccessDto,
-  ) {
-    return this.agendaService.setAccess(userId, dto.enabled);
   }
 
   @Get('businesses')
@@ -46,32 +30,39 @@ export class AgendaController {
     @Param('businessId', ParseIntPipe) businessId: number,
     @Query('date') date: string,
     @Query('serviceId', ParseIntPipe) serviceId: number,
+    @Query('professionalId') professionalId: string | undefined,
     @GetUser() user: AuthUser,
   ) {
-    return this.agendaService.slots(businessId, date, serviceId, user);
+    return this.agendaService.slots(businessId, date, serviceId, user, professionalId ? Number(professionalId) : undefined);
   }
 
   @Get(':businessId/days')
   days(
     @Param('businessId', ParseIntPipe) businessId: number,
     @Query('date') date: string | undefined,
+    @Query('professionalId') professionalId: string | undefined,
     @GetUser() user: AuthUser,
   ) {
-    return this.agendaService.days(businessId, user, date);
+    return this.agendaService.days(businessId, user, date, professionalId ? Number(professionalId) : undefined);
   }
 
   @Get(':businessId/appointments')
-  appointments(@Param('businessId', ParseIntPipe) businessId: number, @GetUser() user: AuthUser) {
-    return this.agendaService.appointments(businessId, user);
+  appointments(
+    @Param('businessId', ParseIntPipe) businessId: number,
+    @Query('professionalId') professionalId: string | undefined,
+    @GetUser() user: AuthUser,
+  ) {
+    return this.agendaService.appointments(businessId, user, professionalId ? Number(professionalId) : undefined);
   }
 
   @Post(':businessId/services')
   createService(
     @Param('businessId', ParseIntPipe) businessId: number,
     @Body() dto: CreateAgendaServiceDto,
+    @Query('professionalId') professionalId: string | undefined,
     @GetUser() user: AuthUser,
   ) {
-    return this.agendaService.createService(businessId, dto, user);
+    return this.agendaService.createService(businessId, dto, user, professionalId ? Number(professionalId) : undefined);
   }
 
   @Post(':businessId/appointments')
@@ -92,9 +83,72 @@ export class AgendaController {
     return this.agendaService.save(businessId, dto, user);
   }
 
+  @Get(':businessId/profesionales')
+  professionals(@Param('businessId', ParseIntPipe) businessId: number, @GetUser() user: AuthUser) {
+    return this.agendaService.listProfessionals(businessId, user);
+  }
+
+  @Post(':businessId/profesionales')
+  createProfessional(
+    @Param('businessId', ParseIntPipe) businessId: number,
+    @GetUser() user: AuthUser,
+    @Body() body: { name: string; phone?: string },
+  ) {
+    return this.agendaService.createProfessional(businessId, user, body);
+  }
+
+  @Patch('profesionales/:id')
+  updateProfessional(
+    @Param('id', ParseIntPipe) id: number,
+    @GetUser() user: AuthUser,
+    @Body() body: { name?: string; phone?: string; isActive?: boolean; agendaControl?: boolean },
+  ) {
+    return this.agendaService.updateProfessional(id, user, body);
+  }
+
+  @Patch('profesionales/:id/retiro')
+  removeProfessional(@Param('id', ParseIntPipe) id: number, @GetUser() user: AuthUser) {
+    return this.agendaService.removeProfessional(id, user);
+  }
+
+  @Get(':businessId/dia')
+  dayBoard(
+    @Param('businessId', ParseIntPipe) businessId: number,
+    @Query('professionalId') professionalId: string,
+    @Query('date') date: string,
+    @GetUser() user: AuthUser,
+  ) {
+    return this.agendaService.dayBoard(businessId, user, Number(professionalId), date);
+  }
+
+  @Get(':businessId/horario')
+  loadSchedule(
+    @Param('businessId', ParseIntPipe) businessId: number,
+    @Query('professionalId') professionalId: string,
+    @Query('mode') mode: string,
+    @Query('weekday') weekday: string | undefined,
+    @Query('date') date: string | undefined,
+    @GetUser() user: AuthUser,
+  ) {
+    return this.agendaService.loadSchedule(businessId, user, Number(professionalId), mode, weekday ? Number(weekday) : undefined, date);
+  }
+
+  @Put(':businessId/horario')
+  saveSchedule(
+    @Param('businessId', ParseIntPipe) businessId: number,
+    @GetUser() user: AuthUser,
+    @Body() body: Record<string, unknown>,
+  ) {
+    return this.agendaService.saveSchedule(businessId, user, body);
+  }
+
   @Get(':businessId')
-  get(@Param('businessId', ParseIntPipe) businessId: number, @GetUser() user: AuthUser) {
-    return this.agendaService.get(businessId, user);
+  get(
+    @Param('businessId', ParseIntPipe) businessId: number,
+    @Query('professionalId') professionalId: string | undefined,
+    @GetUser() user: AuthUser,
+  ) {
+    return this.agendaService.get(businessId, user, professionalId ? Number(professionalId) : undefined);
   }
 
   @Patch('services/:serviceId')

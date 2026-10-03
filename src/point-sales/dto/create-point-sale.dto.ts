@@ -1,5 +1,5 @@
-import { IsInt, IsNotEmpty, IsOptional, IsString, Matches } from 'class-validator';
-import { Type } from 'class-transformer';
+import { IsBoolean, IsInt, IsNotEmpty, IsNumber, IsOptional, IsString, Matches, Min } from 'class-validator';
+import { Transform, Type } from 'class-transformer';
 
 export class CreatePointSaleDto {
   @IsString()
@@ -41,4 +41,15 @@ export class CreatePointSaleDto {
   @IsOptional()
   @Matches(/^[0-6](,[0-6])*$/)
   openDays?: string;
+
+  @IsOptional()
+  @Transform(({ value }) => value === true || value === 'true')
+  @IsBoolean()
+  chargesDelivery?: boolean;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  deliveryFee?: number;
 }

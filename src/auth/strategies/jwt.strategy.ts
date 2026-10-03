@@ -37,6 +37,7 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
       userType: user.datUser.userType,
       role: user.datUser.userType,
       isActive: user.isActive,
+      termsAccepted: user.datUser.userType === 'ADMIN' || Boolean(user.termsAcceptedAt),
     };
   }
 }

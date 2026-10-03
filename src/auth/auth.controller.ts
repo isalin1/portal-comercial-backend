@@ -2,6 +2,7 @@ import { Controller, Get, Post, Body, Patch } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
+import { AcceptTermsDto, AcceptTermsRegisterDto } from './dto/accept-terms.dto';
 import { Auth } from './decorators/auth.decorator';
 import { GetUser } from './decorators/get-user.decorator';
 import { AuthUser } from './interfaces/jwt-payload.interface';
@@ -18,6 +19,17 @@ export class AuthController {
   @Post('login')
   login(@Body() loginDto: LoginDto) {
     return this.authService.login(loginDto);
+  }
+
+  @Post('terminos')
+  @Auth()
+  acceptTerms(@GetUser() user: AuthUser, @Body() body: AcceptTermsDto) {
+    return this.authService.acceptTerms(user.id);
+  }
+
+  @Post('terminos-registro')
+  acceptTermsAfterRegister(@Body() body: AcceptTermsRegisterDto) {
+    return this.authService.acceptTermsWithPassword(body.email, body.password);
   }
 
   @Get('check-auth-status')

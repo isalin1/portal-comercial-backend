@@ -49,13 +49,17 @@ export class CategoryService {
   async remove(id: number) {
     await this.findOne(id);
     return this.prisma.$transaction(async (tx) => {
+      await tx.business.updateMany({
+        where: { categoryId: id },
+        data: { categoryId: null },
+      });
       const items = await tx.item.findMany({
         where: { categoryId: id },
         select: { id: true },
       });
       const itemIds = items.map((item) => item.id);
       if (itemIds.length) {
-        await tx.itemDescription.deleteMany({ where: { itemId: { in: itemIds } } });
+        await tx.orderMenuDish.deleteMany({ where: { itemId: { in: itemIds } } });
         await tx.item.deleteMany({ where: { id: { in: itemIds } } });
       }
       return tx.category.delete({ where: { id } });

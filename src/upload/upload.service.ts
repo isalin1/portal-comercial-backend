@@ -58,7 +58,7 @@ export class UploadService {
         },
         (error, result) => {
           if (error || !result) {
-            reject(error ?? new Error('Error al subir imagen'));
+            reject(new BadRequestException('No se pudo guardar la foto. Inténtalo de nuevo.'));
             return;
           }
           resolve(result.secure_url);

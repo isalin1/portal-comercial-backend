@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -9,6 +10,7 @@ import { CreatePointSaleDto } from './dto/create-point-sale.dto';
 import { UpdatePointSaleDto } from './dto/update-point-sale.dto';
 import { AuthUser } from 'src/auth/interfaces/jwt-payload.interface';
 import { isOpenNow, scheduleLabel, toWhatsAppUrl } from 'src/common/directory.utils';
+import { PublicationService } from 'src/publication/publication.service';
 
 const include = {
   address: { include: { district: { include: { province: true } } } },
@@ -18,14 +20,17 @@ const include = {
 
 @Injectable()
 export class PointSalesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly publication: PublicationService,
+  ) {}
 
-  private map(point: {
+  private map<T extends {
     phone: string;
     opensAt?: string | null;
     closesAt?: string | null;
     openDays?: string | null;
-  }) {
+  }>(point: T) {
     return {
       ...point,
       whatsappUrl: toWhatsAppUrl(point.phone),
@@ -46,12 +51,23 @@ export class PointSalesService {
     throw new ForbiddenException('No puedes gestionar este punto de venta');
   }
 
+  private async districtFor(businessId: number) {
+    const business = await this.prisma.business.findUnique({
+      where: { id: businessId },
+      select: { zone: { select: { districtId: true } } },
+    });
+    return business?.zone?.districtId ?? null;
+  }
+
   async create(dto: CreatePointSaleDto, user: AuthUser) {
     await this.assertBusiness(user, Number(dto.businessId));
+    const lockedDistrict = await this.districtFor(Number(dto.businessId));
+    const districtId = lockedDistrict ?? Number(dto.districtId);
+    if (!districtId) throw new BadRequestException('Elige el distrito del punto de venta');
 
     const address = await this.prisma.address.create({
       data: {
-        districtId: Number(dto.districtId),
+        districtId,
         street: dto.street,
         urbanZone: dto.urbanZone,
         reference: dto.reference,
@@ -67,10 +83,20 @@ export class PointSalesService {
         opensAt: dto.opensAt || null,
         closesAt: dto.closesAt || null,
         openDays: dto.openDays || null,
+        chargesDelivery: Boolean(dto.chargesDelivery),
+        deliveryFee: dto.chargesDelivery ? Number(dto.deliveryFee || 0) : 0,
       },
       include,
     });
-    return this.map(point);
+    await this.publication.trackCreate(user, point.businessId, 'POINT', point.id, [
+      { field: 'name', label: `Nombre del punto · ${point.name}`, value: point.name },
+      { field: 'phone', label: `Teléfono del punto · ${point.name}`, value: point.phone },
+      { field: 'street', label: `Dirección · ${point.name}`, value: point.address.street },
+      { field: 'urbanZone', label: `Urbanización · ${point.name}`, value: point.address.urbanZone },
+      { field: 'reference', label: `Referencia · ${point.name}`, value: point.address.reference },
+    ]);
+    const [decorated] = await this.publication.decoratePoints(user, [this.map(point)]);
+    return decorated;
   }
 
   async findAll(user: AuthUser, businessId?: number) {
@@ -88,7 +114,7 @@ export class PointSalesService {
       include,
       orderBy: { name: 'asc' },
     });
-    return points.map((item) => this.map(item));
+    return this.publication.decoratePoints(user, points.map((item) => this.map(item)));
   }
 
   async findOne(id: number, user: AuthUser) {
@@ -98,12 +124,14 @@ export class PointSalesService {
     });
     if (!point) throw new NotFoundException('Punto de venta no encontrado');
     await this.assertBusiness(user, point.businessId);
-    return this.map(point);
+    const [decorated] = await this.publication.decoratePoints(user, [this.map(point)]);
+    return decorated;
   }
 
   async update(id: number, dto: UpdatePointSaleDto, user: AuthUser) {
     const current = await this.prisma.pointSale.findUnique({
       where: { id },
+      include: { address: true },
     });
     if (!current) throw new NotFoundException('Punto de venta no encontrado');
     await this.assertBusiness(user, current.businessId);
@@ -112,7 +140,17 @@ export class PointSalesService {
       await this.assertBusiness(user, Number(dto.businessId));
     }
 
+    const businessId = dto.businessId ? Number(dto.businessId) : current.businessId;
+    const lockedDistrict = await this.districtFor(businessId);
+    const blocked = await this.publication.reviewFields(user, current.businessId, 'POINT', id, [
+      ...(dto.name !== undefined ? [{ field: 'name', label: `Nombre del punto · ${dto.name || current.name}`, before: current.name, after: dto.name }] : []),
+      ...(dto.phone !== undefined ? [{ field: 'phone', label: `Teléfono del punto · ${current.name}`, before: current.phone, after: dto.phone }] : []),
+      ...(dto.street !== undefined ? [{ field: 'street', label: `Dirección · ${current.name}`, before: current.address.street, after: dto.street }] : []),
+      ...(dto.urbanZone !== undefined ? [{ field: 'urbanZone', label: `Urbanización · ${current.name}`, before: current.address.urbanZone, after: dto.urbanZone }] : []),
+      ...(dto.reference !== undefined ? [{ field: 'reference', label: `Referencia · ${current.name}`, before: current.address.reference, after: dto.reference }] : []),
+    ]);
     if (
+      lockedDistrict ||
       dto.street ||
       dto.districtId ||
       dto.urbanZone !== undefined ||
@@ -121,10 +159,10 @@ export class PointSalesService {
       await this.prisma.address.update({
         where: { id: current.addressId },
         data: {
-          street: dto.street,
-          districtId: dto.districtId ? Number(dto.districtId) : undefined,
-          urbanZone: dto.urbanZone,
-          reference: dto.reference,
+          street: blocked.has('street') ? undefined : dto.street,
+          districtId: lockedDistrict ?? (dto.districtId ? Number(dto.districtId) : undefined),
+          urbanZone: blocked.has('urbanZone') ? undefined : dto.urbanZone,
+          reference: blocked.has('reference') ? undefined : dto.reference,
         },
       });
     }
@@ -132,15 +170,18 @@ export class PointSalesService {
     const point = await this.prisma.pointSale.update({
       where: { id },
       data: {
-        name: dto.name,
-        phone: dto.phone,
+        name: blocked.has('name') ? undefined : dto.name,
+        phone: blocked.has('phone') ? undefined : dto.phone,
         businessId: dto.businessId ? Number(dto.businessId) : undefined,
         opensAt: dto.opensAt === undefined ? undefined : dto.opensAt || null,
         closesAt: dto.closesAt === undefined ? undefined : dto.closesAt || null,
         openDays: dto.openDays === undefined ? undefined : dto.openDays || null,
+        chargesDelivery: dto.chargesDelivery === undefined ? undefined : Boolean(dto.chargesDelivery),
+        deliveryFee: dto.chargesDelivery === undefined ? undefined : dto.chargesDelivery ? Number(dto.deliveryFee || 0) : 0,
       },
       include,
     });
-    return this.map(point);
+    const [decorated] = await this.publication.decoratePoints(user, [this.map(point)]);
+    return decorated;
   }
 }

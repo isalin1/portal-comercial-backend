@@ -6,6 +6,7 @@ import {
   Patch,
   Param,
   Delete,
+  Query,
   UseGuards,
   ParseIntPipe,
 } from '@nestjs/common';
@@ -40,6 +41,13 @@ export class UserController {
     return this.userService.findEmpresarios();
   }
 
+  @Get('pagos')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(UserType.ADMIN)
+  findPayments(@Query('date') date?: string) {
+    return this.userService.findPlanPayments(date);
+  }
+
   @Patch(':id/vigencia')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(UserType.ADMIN)
@@ -47,7 +55,7 @@ export class UserController {
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: UpdateVigenciaDto,
   ) {
-    return this.userService.extendVigencia(id, dto.days);
+    return this.userService.extendVigencia(id, dto.planId);
   }
 
   @Post()

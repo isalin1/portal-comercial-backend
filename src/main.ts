@@ -4,7 +4,10 @@ if (!globalThis.crypto) {
 }
 
 
+import { trustWindowsCertificates } from './upload/windows-ca';
 import { NestFactory } from '@nestjs/core';
+
+trustWindowsCertificates();
 import { AppModule } from './app.module';
 import { ValidationPipe } from '@nestjs/common';
 // import { RolesGuard } from './auth/guards/roles.guard';

@@ -16,4 +16,5 @@ export type AuthUser = {
   userType: UserType;
   role: UserType;
   isActive: boolean;
+  termsAccepted: boolean;
 };
