@@ -6,12 +6,14 @@ import {
 import { UserService } from 'src/user/user.service';
 import { JwtService } from '@nestjs/jwt';
 import { hash } from 'bcrypt';
+import { createHash, randomBytes } from 'crypto';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import * as bcrypt from 'bcrypt';
 import { AuthUser, JwtPayload } from './interfaces/jwt-payload.interface';
 import { UserType } from '@prisma/client';
 import { PrismaService } from 'src/prisma/prisma.service';
+import { EmailService } from 'src/email/email.service';
 
 @Injectable()
 export class AuthService {
@@ -19,6 +21,7 @@ export class AuthService {
     private readonly userService: UserService,
     private readonly jwtService: JwtService,
     private readonly prisma: PrismaService,
+    private readonly emailService: EmailService,
   ) {}
 
   private toAuthUser(user: {
@@ -82,6 +85,55 @@ export class AuthService {
   async register(registerDto: RegisterDto) {
     const userType = registerDto.userType ?? UserType.CLIENTE;
     const freePlan = userType === UserType.EMPRESARIO && registerDto.plan === 'free';
+    const existing = await this.userService.findByEmailOrNull(registerDto.email);
+
+    if (existing?.datUser) {
+      const currentType = existing.datUser.userType;
+
+      if (userType === UserType.CLIENTE && currentType === UserType.EMPRESARIO) {
+        throw new BadRequestException({
+          code: 'ALREADY_EMPRESARIO',
+          message: 'No se requiere registrar como cliente para hacer pedido',
+        });
+      }
+
+      if (userType === UserType.EMPRESARIO && currentType === UserType.CLIENTE) {
+        if (!registerDto.confirmUpgrade) {
+          throw new BadRequestException({
+            code: 'CLIENT_UPGRADE_REQUIRED',
+            message:
+              'Ya estás registrado como cliente. ¿Estás seguro de cambiar tu registro a empresario?',
+          });
+        }
+
+        const passwordOk = await bcrypt.compare(registerDto.password, existing.password);
+        if (!passwordOk) {
+          throw new UnauthorizedException('contraseña incorrecta');
+        }
+
+        const upgraded = await this.userService.requestEmpresarioUpgrade(existing.id, {
+          firstName: registerDto.firstName,
+          lastName: registerDto.lastName,
+          phone: registerDto.phone,
+          freePlan,
+        });
+
+        return {
+          user: upgraded,
+          message: freePlan
+            ? 'Tu cuenta ahora es de empresario con plan Free. Ya puedes iniciar sesión.'
+            : 'Solicitud registrada. Seguirás como cliente hasta que un administrador active tu plan de empresario.',
+          upgradedFromClient: true,
+          becameEmpresario: freePlan,
+        };
+      }
+
+      throw new BadRequestException({
+        code: 'EMAIL_IN_USE',
+        message: 'el email esta en uso',
+      });
+    }
+
     const passwordHashed = await hash(registerDto.password, 10);
 
     const user = await this.userService.create({
@@ -179,5 +231,87 @@ export class AuthService {
     return {
       message: 'Contraseña actualizada exitosamente',
     };
+  }
+
+  private hashResetToken(token: string) {
+    return createHash('sha256').update(token).digest('hex');
+  }
+
+  async requestPasswordReset(email: string) {
+    const normalized = email.trim().toLowerCase();
+    const generic = {
+      message:
+        'Si el correo está registrado, te enviamos un enlace para restablecer tu contraseña.',
+    };
+
+    const user = await this.userService.findByEmailOrNull(normalized);
+    if (!user) return generic;
+
+    const recent = await this.prisma.passwordResetToken.findFirst({
+      where: {
+        userId: user.id,
+        createdAt: { gt: new Date(Date.now() - 60_000) },
+        usedAt: null,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (recent) return generic;
+
+    await this.prisma.passwordResetToken.deleteMany({
+      where: { userId: user.id, usedAt: null },
+    });
+
+    const rawToken = randomBytes(32).toString('hex');
+    const tokenHash = this.hashResetToken(rawToken);
+    const expiresAt = new Date(Date.now() + 60 * 60 * 1000);
+
+    await this.prisma.passwordResetToken.create({
+      data: {
+        userId: user.id,
+        tokenHash,
+        expiresAt,
+      },
+    });
+
+    try {
+      await this.emailService.sendPasswordResetEmail(user.datUser.email, rawToken);
+    } catch {
+      await this.prisma.passwordResetToken.deleteMany({ where: { tokenHash } });
+      throw new BadRequestException(
+        'No se pudo enviar el correo. Intenta de nuevo en unos minutos.',
+      );
+    }
+
+    return generic;
+  }
+
+  async resetPassword(token: string, password: string) {
+    const tokenHash = this.hashResetToken(String(token || '').trim());
+    const row = await this.prisma.passwordResetToken.findUnique({
+      where: { tokenHash },
+    });
+
+    if (!row || row.usedAt || row.expiresAt.getTime() < Date.now()) {
+      throw new BadRequestException(
+        'El enlace no es válido o ya expiró. Solicita uno nuevo.',
+      );
+    }
+
+    const newPasswordHashed = await hash(password, 10);
+    await this.prisma.$transaction([
+      this.prisma.user.update({
+        where: { id: row.userId },
+        data: { password: newPasswordHashed },
+      }),
+      this.prisma.passwordResetToken.update({
+        where: { id: row.id },
+        data: { usedAt: new Date() },
+      }),
+      this.prisma.passwordResetToken.deleteMany({
+        where: { userId: row.userId, usedAt: null, id: { not: row.id } },
+      }),
+    ]);
+
+    return { message: 'Contraseña actualizada. Ya puedes iniciar sesión.' };
   }
 }

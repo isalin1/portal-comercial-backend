@@ -86,26 +86,36 @@ export class PedidosService {
     }
     const day = /^\d{4}-\d{2}-\d{2}$/.test(date || '') ? date! : this.limaDay(new Date());
     const orders = await this.prisma.customerOrder.findMany({
-      where: { businessId, status: { not: OrderStatus.ANULADO } },
+      where: {
+        businessId,
+        status: { notIn: [OrderStatus.ANULADO, OrderStatus.PENDIENTE_APROBACION] },
+      },
       include: orderInclude,
       orderBy: { createdAt: 'desc' },
     });
-    const delivered = orders.filter((order) => {
+    const registeredOnDay = orders.filter((order) => {
+      const registered = order.stages.find((item) => item.status === OrderStatus.REGISTRADO);
+      return this.limaDay(registered?.startedAt || order.createdAt) === day;
+    });
+    const deliveredOnDay = orders.filter((order) => {
       if (order.status !== OrderStatus.ENTREGADO) return false;
       const stage = order.stages.find((item) => item.status === OrderStatus.ENTREGADO);
       return this.limaDay(stage?.startedAt || order.updatedAt) === day;
     });
-    const pending = orders
-      .map((order) => this.summaryOrder(order))
-      .filter((item) => Math.round(item.balance * 100) > 0);
-    const deliveredOrders = delivered.map((order) => this.summaryOrder(order));
+    const dayOrders = registeredOnDay.map((order) => this.summaryOrder(order));
+    const pending = dayOrders.filter((item) => Math.round(item.balance * 100) > 0);
+    const deliveredOrders = deliveredOnDay.map((order) => this.summaryOrder(order));
     return {
       date: day,
-      delivered: deliveredOrders.length,
-      deliveredTotal: deliveredOrders.reduce((sum, order) => sum + order.total, 0),
-      collected: deliveredOrders.reduce((sum, order) => sum + order.paid, 0),
-      deliveredOrders,
+      orderCount: dayOrders.length,
+      orderTotal: dayOrders.reduce((sum, order) => sum + order.total, 0),
+      collected: dayOrders.reduce((sum, order) => sum + order.paid, 0),
+      dayOrders,
       pending,
+      delivered: deliveredOrders.length,
+      deliveredOrders,
+      // Compatibilidad con clientes anteriores
+      deliveredTotal: dayOrders.reduce((sum, order) => sum + order.total, 0),
     };
   }
 
@@ -272,6 +282,15 @@ export class PedidosService {
     return this.presentClient(order);
   }
 
+  async discardForClient(user: AuthUser, id: number) {
+    const current = await this.clientOrder(user, id);
+    if (current.status !== OrderStatus.ANULADO) {
+      throw new BadRequestException('Solo se puede descartar un pedido anulado');
+    }
+    await this.prisma.customerOrder.delete({ where: { id } });
+    return { ok: true, id };
+  }
+
   async setDelivery(user: AuthUser, businessId: number, chargesDelivery: boolean, deliveryFee: number) {
     await this.own(user, businessId);
     if (chargesDelivery && (Number.isNaN(deliveryFee) || deliveryFee < 0)) {
@@ -354,6 +373,9 @@ export class PedidosService {
     });
     const visible = items.filter((item) => {
       if (item.kind === ItemKind.MENU) return true;
+      if (item.kind === ItemKind.OFERTA_DIA) {
+        return Boolean(item.availabilities[0]?.available);
+      }
       const mark = item.availabilities[0];
       if (mark) return mark.available;
       return true;
@@ -524,7 +546,7 @@ export class PedidosService {
     const total = this.total(order);
     const paid = order.payments.reduce((sum, payment) => sum + Number(payment.amount), 0);
     if (Math.round((paid + amount) * 100) > Math.round(total * 100)) {
-      throw new BadRequestException(`El pago supera el saldo. Puedes registrar hasta S/ ${(total - paid).toFixed(2)}`);
+      throw new BadRequestException('No es posible registrar un pago mayor al saldo actual del pedido');
     }
     await this.prisma.orderPayment.create({ data: { orderId: id, amount } });
     return this.mapOrder(await this.findOwned(user, id));
@@ -533,10 +555,24 @@ export class PedidosService {
   private async cartaLine(businessId: number, raw: Record<string, unknown>) {
     const description = await this.prisma.itemDescription.findUnique({
       where: { id: Number(raw.descriptionId) },
-      include: { unit: true, item: { include: { pointSale: true } } },
+      include: {
+        unit: true,
+        item: {
+          include: {
+            pointSale: true,
+            availabilities: { where: { day: calendarDateInLima() } },
+          },
+        },
+      },
     });
     if (!description || description.item.pointSale.businessId !== businessId || description.item.kind === ItemKind.MENU) {
       throw new BadRequestException('Ese producto a la carta no pertenece al negocio');
+    }
+    if (description.item.kind === ItemKind.OFERTA_DIA) {
+      const mark = description.item.availabilities[0];
+      if (!mark?.available) {
+        throw new BadRequestException('Esa oferta del día no está autorizada para hoy');
+      }
     }
     if (raw.pointSaleId && description.item.pointSaleId !== Number(raw.pointSaleId)) {
       throw new BadRequestException('Ese producto no se ofrece en el punto de venta elegido');
@@ -713,7 +749,11 @@ export class PedidosService {
 
   private async presentClient(order: Prisma.CustomerOrderGetPayload<{ include: typeof clientOrderInclude }>) {
     const mapped = this.mapOrder(order);
-    return { ...mapped, lines: await this.attachCatalog(order) };
+    return {
+      ...mapped,
+      lines: await this.attachCatalog(order),
+      whatsappUrl: toWhatsAppUrl(order.pointSale?.phone || ''),
+    };
   }
 
   private async attachCatalog(order: Prisma.CustomerOrderGetPayload<{ include: typeof clientOrderInclude }>) {

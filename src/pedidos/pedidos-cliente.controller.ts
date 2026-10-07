@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, ParseIntPipe, Patch, Post } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, ParseIntPipe, Patch, Post } from '@nestjs/common';
 import { UserType } from '@prisma/client';
 import { Auth } from 'src/auth/decorators/auth.decorator';
 import { GetUser } from 'src/auth/decorators/get-user.decorator';
@@ -28,6 +28,11 @@ export class PedidosClienteController {
   @Post('mios/:id/anular')
   cancel(@GetUser() user: AuthUser, @Param('id', ParseIntPipe) id: number) {
     return this.pedidos.cancelForClient(user, id);
+  }
+
+  @Delete('mios/:id')
+  discard(@GetUser() user: AuthUser, @Param('id', ParseIntPipe) id: number) {
+    return this.pedidos.discardForClient(user, id);
   }
 
   @Post('cliente')

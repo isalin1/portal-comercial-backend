@@ -36,7 +36,7 @@ export class ItemService implements OnModuleInit {
   async uncheckMenuForToday() {
     const day = calendarDateInLima();
     const items = await this.prisma.item.findMany({
-      where: { kind: ItemKind.MENU, isActive: true },
+      where: { kind: { in: [ItemKind.MENU, ItemKind.OFERTA_DIA] }, isActive: true },
       select: { id: true },
     });
     if (!items.length) return;
@@ -77,35 +77,58 @@ export class ItemService implements OnModuleInit {
         'Solo puedes publicar ítems en las categorías del rubro de tu negocio',
       );
     }
-    if (locksToOneCategory(business.rubro.name)) {
-      if (!business.categoryId) {
-        throw new BadRequestException('Elige primero la categoría de tu negocio');
-      }
-      if (business.categoryId !== category.id) {
-        throw new ForbiddenException('Solo puedes publicar ítems en la categoría que elegiste');
-      }
+    if (business.categoryId && business.categoryId !== category.id) {
+      throw new ForbiddenException('Solo puedes publicar ítems en la categoría que elegiste');
+    }
+    if (locksToOneCategory(business.rubro.name) && !business.categoryId) {
+      throw new BadRequestException('Elige primero la categoría de tu negocio');
     }
     return category;
   }
 
-  private plate(categoryName: string, dto: Pick<CreateItemDto, 'kind' | 'menuPart' | 'descriptions'>) {
-    const kind: ItemKind = isMenuCategory(categoryName) && dto.kind === 'MENU' ? ItemKind.MENU : ItemKind.CARTA;
+  private plate(categoryName: string, dto: Pick<CreateItemDto, 'kind' | 'menuPart' | 'descriptions' | 'compareAtPrice'>) {
+    const kind: ItemKind =
+      dto.kind === 'OFERTA_DIA'
+        ? ItemKind.OFERTA_DIA
+        : isMenuCategory(categoryName) && dto.kind === 'MENU'
+          ? ItemKind.MENU
+          : ItemKind.CARTA;
     if (kind === ItemKind.MENU && !dto.menuPart) {
       throw new BadRequestException('Elige si el plato es entrada, segundo o refresco');
     }
     const descriptions = (dto.descriptions || []).map((line) => {
+      const text = String(line.description || '').trim();
       if (kind === ItemKind.MENU) {
-        return { id: line.id, description: line.description, price: null as number | null, unitId: null as number | null };
+        return { id: line.id, description: text, price: null as number | null, unitId: null as number | null };
+      }
+      if (!text) {
+        throw new BadRequestException('Completa la descripción para terminar el registro');
       }
       if (line.price === undefined || line.price === null || Number.isNaN(Number(line.price)) || Number(line.price) < 0) {
         throw new BadRequestException('El precio no puede ser menor que cero');
       }
       if (!line.unitId) throw new BadRequestException('Elige la unidad de cada descripción');
-      return { id: line.id, description: line.description, price: Number(line.price), unitId: Number(line.unitId) };
-    });
+      return { id: line.id, description: text, price: Number(line.price), unitId: Number(line.unitId) };
+    }).filter((line) => line.description);
+    if ((kind === ItemKind.CARTA || kind === ItemKind.OFERTA_DIA) && !descriptions.length) {
+      throw new BadRequestException('Completa la descripción para terminar el registro');
+    }
+    let compareAtPrice: number | null = null;
+    if (kind === ItemKind.OFERTA_DIA) {
+      if (dto.compareAtPrice === undefined || dto.compareAtPrice === null || dto.compareAtPrice === ('' as unknown)) {
+        compareAtPrice = null;
+      } else {
+        const value = Number(dto.compareAtPrice);
+        if (Number.isNaN(value) || value < 0) {
+          throw new BadRequestException('El precio de referencia no puede ser menor que cero');
+        }
+        compareAtPrice = value;
+      }
+    }
     return {
       kind,
       menuPart: kind === ItemKind.MENU ? (dto.menuPart as MenuPart) : null,
+      compareAtPrice,
       descriptions,
     };
   }
@@ -153,6 +176,7 @@ export class ItemService implements OnModuleInit {
         isActive: dto.isActive ?? true,
         kind: plate.kind,
         menuPart: plate.menuPart,
+        compareAtPrice: plate.kind === ItemKind.OFERTA_DIA ? plate.compareAtPrice : null,
         menuOfferId: menuOfferIds.length === 1 ? menuOfferIds[0] : null,
         menuLinks: menuOfferIds.length ? { create: menuOfferIds.map((menuOfferId) => ({ menuOfferId })) } : undefined,
         imageUrl,
@@ -162,6 +186,13 @@ export class ItemService implements OnModuleInit {
       },
       include,
     });
+    if (plate.kind === ItemKind.OFERTA_DIA || plate.kind === ItemKind.MENU) {
+      await this.prisma.itemAvailability.upsert({
+        where: { itemId_day: { itemId: created.id, day: calendarDateInLima() } },
+        create: { itemId: created.id, day: calendarDateInLima(), available: false },
+        update: {},
+      });
+    }
     await this.publication.trackCreate(user, point.business.id, 'ITEM', created.id, [
       { field: 'name', label: `Nombre del producto · ${created.name}`, value: created.name },
       { field: 'imageUrl', label: `Foto del producto · ${created.name}`, value: created.imageUrl },
@@ -221,10 +252,16 @@ export class ItemService implements OnModuleInit {
     const point = await this.assertPointSale(user, pointId);
     const categoryId = dto.categoryId ? Number(dto.categoryId) : current.categoryId;
     const category = await this.assertCategory(user, categoryId, point.business.id);
-    const plate = dto.descriptions || dto.kind || dto.menuPart
+    const plate = dto.descriptions || dto.kind || dto.menuPart || dto.compareAtPrice !== undefined
       ? this.plate(category.name, {
-          kind: dto.kind || (current.kind as 'CARTA' | 'MENU'),
+          kind: dto.kind || (current.kind as 'CARTA' | 'MENU' | 'OFERTA_DIA'),
           menuPart: dto.menuPart === undefined ? current.menuPart : dto.menuPart,
+          compareAtPrice:
+            dto.compareAtPrice !== undefined
+              ? dto.compareAtPrice
+              : current.compareAtPrice != null
+                ? Number(current.compareAtPrice)
+                : null,
           descriptions: dto.descriptions || [],
         })
       : null;
@@ -263,6 +300,7 @@ export class ItemService implements OnModuleInit {
           ? {
               kind: plate.kind,
               menuPart: plate.menuPart,
+              compareAtPrice: plate.kind === ItemKind.OFERTA_DIA ? plate.compareAtPrice : null,
             }
           : {}),
         ...(menuOfferIds
@@ -358,7 +396,7 @@ export class ItemService implements OnModuleInit {
         categoryName: item.category.name,
         available: item.availabilities[0]
           ? item.availabilities[0].available
-          : item.kind !== ItemKind.MENU,
+          : item.kind === ItemKind.CARTA,
       })),
     };
   }

@@ -977,7 +977,7 @@ export class AgendaService {
 
   private whatsapp(phone: string, text: string) {
     const base = toWhatsAppUrl(phone);
-    return base ? `${base}&text=${encodeURIComponent(text)}` : null;
+    return base ? `${base}?text=${encodeURIComponent(text)}` : null;
   }
 
   private cents(value: Prisma.Decimal | number) {

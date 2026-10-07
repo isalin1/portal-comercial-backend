@@ -7,8 +7,10 @@ import { PrismaService } from 'src/prisma/prisma.service';
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
   constructor(private readonly prisma: PrismaService) {
+    const jwtSeed = process.env.JWT_SEED;
+    if (!jwtSeed) throw new Error('JWT_SEED is required');
     super({
-      secretOrKey: process.env.JWT_SEED || 'fallback-secret',
+      secretOrKey: jwtSeed,
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
     });
   }

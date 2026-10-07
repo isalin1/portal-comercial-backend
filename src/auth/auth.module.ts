@@ -7,16 +7,21 @@ import { UserModule } from 'src/user/user.module';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { PrismaModule } from '../prisma/prisma.module';
 import { CombinedAuthGuard } from './guards/auth.guard';
+import { EmailModule } from 'src/email/email.module';
+
+const jwtSeed = process.env.JWT_SEED;
+if (!jwtSeed) throw new Error('JWT_SEED is required');
 
 @Module({
   imports: [
     PassportModule.register({ defaultStrategy: 'jwt' }),
     JwtModule.register({
-      secret: process.env.JWT_SEED || 'fallback-secret',
+      secret: jwtSeed,
       signOptions: { expiresIn: '1d' },
     }),
     UserModule,
     PrismaModule,
+    EmailModule,
   ],
   controllers: [AuthController],
   providers: [AuthService, JwtStrategy, CombinedAuthGuard],

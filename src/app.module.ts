@@ -25,6 +25,7 @@ import { PlanModule } from './plan/plan.module';
 import { MarketModule } from './market/market.module';
 import { ZoneModule } from './zone/zone.module';
 import { PublicationModule } from './publication/publication.module';
+import { MetricsModule } from './metrics/metrics.module';
 
 @Module({
   imports: [
@@ -54,6 +55,7 @@ import { PublicationModule } from './publication/publication.module';
     MarketModule,
     ZoneModule,
     PublicationModule,
+    MetricsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

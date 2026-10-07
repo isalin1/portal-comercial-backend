@@ -39,4 +39,8 @@ export class CreateUserDto {
   @IsString()
   @IsOptional()
   plan?: string;
+
+  @IsBoolean()
+  @IsOptional()
+  confirmUpgrade?: boolean;
 }

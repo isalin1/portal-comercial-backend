@@ -52,7 +52,7 @@ export function toWhatsAppUrl(phone: string) {
   let digits = phone.replace(/\D/g, '');
   if (digits.startsWith('00')) digits = digits.slice(2);
   if (digits.length === 9) digits = `51${digits}`;
-  return digits ? `whatsapp://send?phone=${digits}` : null;
+  return digits ? `https://wa.me/${digits}` : null;
 }
 
 const WEEK_ORDER = [1, 2, 3, 4, 5, 6, 0];

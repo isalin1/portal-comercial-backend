@@ -46,8 +46,13 @@ export class CreateItemDto {
   categoryId: number;
 
   @IsOptional()
-  @IsIn(['CARTA', 'MENU'])
-  kind?: 'CARTA' | 'MENU';
+  @IsIn(['CARTA', 'MENU', 'OFERTA_DIA'])
+  kind?: 'CARTA' | 'MENU' | 'OFERTA_DIA';
+
+  @IsOptional()
+  @Transform(({ value }) => (value === '' || value === null || value === undefined ? undefined : Number(value)))
+  @IsNumber()
+  compareAtPrice?: number | null;
 
   @IsOptional()
   @Transform(({ value }) => (value === '' || value === null ? undefined : value))

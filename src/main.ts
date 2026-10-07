@@ -19,7 +19,6 @@ process.on('uncaughtException', (err) => {
 });
 
 async function bootstrap() {
-  console.log('JWT_SEED:', process.env.JWT_SEED); // <-- Log de depuración
   const app = await NestFactory.create(AppModule);
 
   // Configuración de CORS más permisiva para desarrollo
@@ -30,7 +29,13 @@ async function bootstrap() {
         return callback(null, true);
       }
       
+      const fromEnv = [process.env.FRONTEND_URL, process.env.CORS_ORIGINS]
+        .filter(Boolean)
+        .flatMap((value) => String(value).split(','))
+        .map((value) => value.trim())
+        .filter(Boolean);
       const allowedOrigins = [
+        ...fromEnv,
         'http://localhost:5173',
         'http://localhost:3000',
         'http://127.0.0.1:5173',

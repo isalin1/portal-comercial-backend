@@ -10,7 +10,12 @@ import { UpdateUserDto } from './dto/update-user.dto';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { UpdateUserStatusDto } from './dto/update-user-status.dto';
 import { UpdateUserRoleDto } from './dto/update-user-role.dto';
-import { addCalendarDays, calendarDateInLima, isVigente, nextVigenciaEnd } from 'src/common/directory.utils';
+import {
+  addCalendarDays,
+  calendarDateInLima,
+  isVigente,
+  nextVigenciaEnd,
+} from 'src/common/directory.utils';
 import { comparePlans } from 'src/common/plan-features';
 import { AuthUser } from 'src/auth/interfaces/jwt-payload.interface';
 import * as bcrypt from 'bcrypt';
@@ -100,6 +105,75 @@ export class UserService {
     return this.omitPassword(datUser.user);
   }
 
+  async requestEmpresarioUpgrade(
+    userId: number,
+    data: { firstName: string; lastName: string; phone: string; freePlan: boolean },
+  ) {
+    const current = await this.findWithPassword(userId);
+    if (current.datUser.userType !== UserType.CLIENTE) {
+      throw new ConflictException('Esta cuenta ya no es de cliente');
+    }
+
+    await this.prisma.datUser.update({
+      where: { id: current.datUserId },
+      data: {
+        firstName: data.firstName,
+        lastName: data.lastName,
+        phone: data.phone,
+        ...(data.freePlan ? { userType: UserType.EMPRESARIO } : {}),
+      },
+    });
+
+    if (data.freePlan) {
+      const libre = await this.prisma.plan.findFirst({ where: { name: 'Libre' } });
+      const setting = await this.prisma.appSetting.findUnique({ where: { id: 1 } });
+      const days = libre?.days || setting?.freePlanDays || 30;
+      const vigenciaStart = calendarDateInLima();
+      const vigenciaEnd = addCalendarDays(vigenciaStart, days);
+      return this.omitPassword(
+        await this.prisma.user.update({
+          where: { id: userId },
+          data: {
+            pendingEmpresario: false,
+            isActive: true,
+            plan: 'FREE',
+            planId: libre?.id,
+            vigenciaStart,
+            vigenciaEnd,
+            vigenciaDays: days,
+          },
+          include: userInclude,
+        }),
+      );
+    }
+
+    return this.omitPassword(
+      await this.prisma.user.update({
+        where: { id: userId },
+        data: { pendingEmpresario: true },
+        include: userInclude,
+      }),
+    );
+  }
+
+  private async promotePendingEmpresario(userId: number) {
+    const current = await this.prisma.user.findUnique({
+      where: { id: userId },
+      include: { datUser: true },
+    });
+    if (!current?.pendingEmpresario || !current.datUser) return;
+    if (current.datUser.userType === UserType.CLIENTE) {
+      await this.prisma.datUser.update({
+        where: { id: current.datUserId },
+        data: { userType: UserType.EMPRESARIO },
+      });
+    }
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { pendingEmpresario: false },
+    });
+  }
+
   async findAll() {
     const users = await this.prisma.user.findMany({
       include: userInclude,
@@ -131,8 +205,9 @@ export class UserService {
   }
 
   async findByEmailOrNull(email: string) {
-    const datUser = await this.prisma.datUser.findUnique({
-      where: { email },
+    const normalized = email.trim().toLowerCase();
+    const datUser = await this.prisma.datUser.findFirst({
+      where: { email: { equals: normalized, mode: 'insensitive' } },
       include: {
         user: {
           include: userInclude,
@@ -220,9 +295,14 @@ export class UserService {
       return this.omitPassword(user);
     }
 
-    const onFreePlan = current.plan === 'FREE' || current.planCatalog?.name === 'Libre';
-    const expired = !current.vigenciaEnd || !isVigente(current.vigenciaEnd);
-    if (current.datUser.userType === UserType.EMPRESARIO && (onFreePlan || expired)) {
+    if (current.pendingEmpresario) {
+      await this.promotePendingEmpresario(id);
+    }
+
+    const refreshed = await this.findWithPassword(id);
+    const onFreePlan = refreshed.plan === 'FREE' || refreshed.planCatalog?.name === 'Libre';
+    const expired = !refreshed.vigenciaEnd || !isVigente(refreshed.vigenciaEnd);
+    if (refreshed.datUser.userType === UserType.EMPRESARIO && (onFreePlan || expired || current.pendingEmpresario)) {
       const libre = await this.prisma.plan.findFirst({ where: { name: 'Libre' } });
       const setting = await this.prisma.appSetting.findUnique({ where: { id: 1 } });
       const days = libre?.days || setting?.freePlanDays || 30;
@@ -236,6 +316,7 @@ export class UserService {
           vigenciaStart,
           vigenciaEnd: addCalendarDays(vigenciaStart, days),
           vigenciaDays: days,
+          pendingEmpresario: false,
         },
         include: userInclude,
       });
@@ -244,7 +325,7 @@ export class UserService {
 
     const user = await this.prisma.user.update({
       where: { id },
-      data: { isActive: true },
+      data: { isActive: true, pendingEmpresario: false },
       include: userInclude,
     });
     return this.omitPassword(user);
@@ -271,7 +352,9 @@ export class UserService {
 
   async findEmpresarios() {
     const users = await this.prisma.user.findMany({
-      where: { datUser: { userType: UserType.EMPRESARIO } },
+      where: {
+        OR: [{ datUser: { userType: UserType.EMPRESARIO } }, { pendingEmpresario: true }],
+      },
       include: userInclude,
       orderBy: { id: 'desc' },
     });
@@ -290,6 +373,24 @@ export class UserService {
     };
   }
 
+  private planNoticeWhatsApp(
+    phone: string | null | undefined,
+    firstName: string,
+    lastName: string,
+    chosen: { name: string; commercialName: string },
+  ) {
+    const digits = (phone || '').replace(/\D/g, '');
+    const normalized =
+      digits.startsWith('00') ? digits.slice(2) : digits.length === 9 ? `51${digits}` : digits;
+    if (!normalized) return { whatsappPhone: null as string | null, whatsappMessage: null as string | null, whatsappUrl: null as string | null };
+    const empresario = `${firstName || ''} ${lastName || ''}`.trim() || 'empresario';
+    const rawPlan = chosen.name?.trim() || chosen.commercialName?.trim() || 'plan';
+    const planName = /^plan\s+/i.test(rawPlan) ? rawPlan.replace(/^plan\s+/i, '') : rawPlan;
+    const whatsappMessage = `Hola ${empresario}, tu plan ${planName} ha sido activado`;
+    const whatsappUrl = `https://wa.me/${normalized}?text=${encodeURIComponent(whatsappMessage)}`;
+    return { whatsappPhone: normalized, whatsappMessage, whatsappUrl };
+  }
+
   async extendVigencia(id: number, planId: number) {
     const current = await this.findWithPassword(id);
     const chosen = await this.prisma.plan.findUnique({ where: { id: planId } });
@@ -299,23 +400,34 @@ export class UserService {
     const vigente = Boolean(current.vigenciaEnd && isVigente(current.vigenciaEnd));
     const change = vigente && current.planCatalog ? comparePlans(current.planCatalog, chosen) : 'asignado';
     const payment = this.paymentData(id, chosen);
+    // Prefer phone just saved on the form (already in DB after prior patch), else stored value
+    const phone = current.datUser.phone;
+    const firstName = current.datUser.firstName;
+    const lastName = current.datUser.lastName;
+    const notice = this.planNoticeWhatsApp(phone, firstName, lastName, chosen);
 
     if (change === 'inferior') {
+      if (current.pendingEmpresario) await this.promotePendingEmpresario(id);
       const [user] = await this.prisma.$transaction([
         this.prisma.user.update({
           where: { id },
-          data: { pendingPlanId: chosen.id },
+          data: { pendingPlanId: chosen.id, pendingEmpresario: false },
           include: userInclude,
         }),
         this.prisma.planPayment.create({ data: payment }),
       ]);
-      return { ...this.omitPassword(user), planChange: 'inferior' as const };
+      return {
+        ...this.omitPassword(user),
+        planChange: 'inferior' as const,
+        ...notice,
+      };
     }
 
     const today = calendarDateInLima();
     const extendCurrent = vigente;
     const vigenciaStart = extendCurrent ? current.vigenciaStart ?? today : today;
     const vigenciaEnd = extendCurrent ? nextVigenciaEnd(current.vigenciaEnd, days) : addCalendarDays(today, days);
+    if (current.pendingEmpresario) await this.promotePendingEmpresario(id);
     const [user] = await this.prisma.$transaction([
       this.prisma.user.update({
         where: { id },
@@ -327,12 +439,17 @@ export class UserService {
           planId: chosen.id,
           pendingPlanId: null,
           isActive: isVigente(vigenciaEnd),
+          pendingEmpresario: false,
         },
         include: userInclude,
       }),
       this.prisma.planPayment.create({ data: payment }),
     ]);
-    return { ...this.omitPassword(user), planChange: change };
+    return {
+      ...this.omitPassword(user),
+      planChange: change,
+      ...notice,
+    };
   }
 
   async findPlanPayments(date?: string) {
